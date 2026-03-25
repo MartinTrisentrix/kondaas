@@ -1,7 +1,7 @@
 import { MongoClient } from 'mongodb';
 
-const withDatabase = async (fn) => {
-  const client = new MongoClient(process.env.MONGODB_URI, {
+const withDatabase = async (uri, fn) => {
+  const client = new MongoClient(uri, {
     maxPoolSize: 1,
     minPoolSize: 0,
     serverSelectionTimeoutMS: 5000,
@@ -45,30 +45,27 @@ export const addLocation = async (c) => {
       isLatest: true
     };
 
-    const existing = await withDatabase(async (db) => {
+    const existing = await withDatabase(process.env.MONGODB_URI, async (db) => {
       return await db.collection("locations").findOne({ mobile: mobile });
     });
 
     if (!existing) {
-      await withDatabase(async (db) => {
+      await withDatabase(process.env.MONGODB_URI, async (db) => {
         await db.collection("locations").insertOne({
           mobile: mobile,
           [date]: [newEntry]
         });
       });
     } else {
-      await withDatabase(async (db) => {
-       
+      await withDatabase(process.env.MONGODB_URI, async (db) => {
         await db.collection("locations").updateOne(
           { mobile: mobile },
           { $push: { [date]: { ...newEntry, isLatest: false } } }
         );
 
-     
         const doc = await db.collection("locations").findOne({ mobile: mobile });
         const entries = doc[date] || [];
 
-  
         let latestIndex = 0;
         let latestTime = 0;
         entries.forEach((entry, index) => {
@@ -79,13 +76,11 @@ export const addLocation = async (c) => {
           }
         });
 
-
         const updatedEntries = entries.map((entry, index) => ({
           ...entry,
           isLatest: index === latestIndex
         }));
 
- 
         await db.collection("locations").updateOne(
           { mobile: mobile },
           { $set: { [date]: updatedEntries } }
@@ -100,15 +95,11 @@ export const addLocation = async (c) => {
   }
 };
 
-
 export const getLocationByTime = async (c) => {
   try {
-  const { mobiles, startTime, endTime, date } = await c.req.json();
+    const { mobiles, startTime, endTime, date } = await c.req.json();
 
-    
-    
-
-    const docs = await withDatabase(async (db) => {
+    const docs = await withDatabase(process.env.MONGODB_URI, async (db) => {
       return await db.collection("locations").find({ mobile: { $in: mobiles } }).toArray();
     });
 
@@ -134,9 +125,6 @@ export const getLocationByTime = async (c) => {
   }
 };
 
-
-
-
 export const getCurrentLocation = async (c) => {
   try {
     const { mobiles } = await c.req.json();
@@ -144,7 +132,7 @@ export const getCurrentLocation = async (c) => {
     const today = new Date();
     const date = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
 
-    const docs = await withDatabase(async (db) => {
+    const docs = await withDatabase(process.env.MONGODB_URI, async (db) => {
       return await db.collection("locations").find({ mobile: { $in: mobiles } }).toArray();
     });
 
