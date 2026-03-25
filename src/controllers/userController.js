@@ -74,3 +74,45 @@ export const updateUser = async (c) => {
     return c.json({ error: err.message }, 500);
   }
 };
+
+export const updateMobile = async (c) => {
+  try {
+    const uri = c.env.MONGODB_URI;
+    const { oldMobile, newMobile } = await c.req.json();
+
+    const oldExisting = await withDatabase(uri, async (db) => {
+      return await db.collection("forms").findOne({ mobile: oldMobile });
+    });
+
+    if (!oldExisting) {
+      return c.json({ error: "Old mobile number not found!" }, 404);
+    }
+
+    const newExisting = await withDatabase(uri, async (db) => {
+      return await db.collection("forms").findOne({ mobile: newMobile });
+    });
+
+    if (newExisting) {
+      return c.json({ error: "New mobile number already registered!" }, 400);
+    }
+
+    await withDatabase(uri, async (db) => {
+      await db.collection("forms").updateOne(
+        { mobile: oldMobile },
+        { $set: { mobile: newMobile } }
+      );
+    });
+
+    await withDatabase(uri, async (db) => {
+      await db.collection("locations").updateOne(
+        { mobile: oldMobile },
+        { $set: { mobile: newMobile } }
+      );
+    });
+
+    return c.json({ message: "Mobile number updated successfully!" });
+
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+};
