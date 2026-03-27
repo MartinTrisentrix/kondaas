@@ -28,7 +28,7 @@ const parseTime = (timeStr) => {
 export const addLocation = async (c) => {
   try {
     const uri = c.env.MONGODB_URI;
-    const { mobile, lat, long } = await c.req.json();
+    const { phoneNo, latitude, longitude } = await c.req.json();
 
     const today = new Date();
     const dateStr = today.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -43,30 +43,26 @@ export const addLocation = async (c) => {
 
     const newEntry = {
       time: time,
-      lat: lat,
-      long: long,
+      latitude: latitude,
+      longitude: longitude,
       isLatest: true
     };
 
-    const existing = await withDatabase(uri, async (db) => {
-      return await db.collection("locations").findOne({ mobile: mobile });
-    });
+    await withDatabase(uri, async (db) => {
+      const existing = await db.collection("locations").findOne({ phoneNo: phoneNo });
 
-    if (!existing) {
-      await withDatabase(uri, async (db) => {
+      if (!existing) {
         await db.collection("locations").insertOne({
-          mobile: mobile,
+          phoneNo: phoneNo,
           [date]: [newEntry]
         });
-      });
-    } else {
-      await withDatabase(uri, async (db) => {
+      } else {
         await db.collection("locations").updateOne(
-          { mobile: mobile },
+          { phoneNo: phoneNo },
           { $push: { [date]: { ...newEntry, isLatest: false } } }
         );
 
-        const doc = await db.collection("locations").findOne({ mobile: mobile });
+        const doc = await db.collection("locations").findOne({ phoneNo: phoneNo });
         const entries = doc[date] || [];
 
         let latestIndex = 0;
@@ -85,11 +81,11 @@ export const addLocation = async (c) => {
         }));
 
         await db.collection("locations").updateOne(
-          { mobile: mobile },
+          { phoneNo: phoneNo },
           { $set: { [date]: updatedEntries } }
         );
-      });
-    }
+      }
+    });
 
     return c.json({ message: "Location saved successfully!" });
 
@@ -104,7 +100,7 @@ export const getLocationByTime = async (c) => {
     const { mobiles, startTime, endTime, date } = await c.req.json();
 
     const docs = await withDatabase(uri, async (db) => {
-      return await db.collection("locations").find({ mobile: { $in: mobiles } }).toArray();
+      return await db.collection("locations").find({ phoneNo: { $in: mobiles } }).toArray();
     });
 
     const start = parseTime(startTime);
@@ -117,7 +113,7 @@ export const getLocationByTime = async (c) => {
         return entryTime >= start && entryTime <= end;
       });
       return {
-        mobile: doc.mobile,
+        phoneNo: doc.phoneNo,
         entries: filtered
       };
     });
@@ -139,14 +135,14 @@ export const getCurrentLocation = async (c) => {
     const date = dateStr.replace(/-/g, '');
 
     const docs = await withDatabase(uri, async (db) => {
-      return await db.collection("locations").find({ mobile: { $in: mobiles } }).toArray();
+      return await db.collection("locations").find({ phoneNo: { $in: mobiles } }).toArray();
     });
 
     const result = docs.map((doc) => {
       const entries = doc[date] || [];
       const latest = entries.find((entry) => entry.isLatest === true);
       return {
-        mobile: doc.mobile,
+        phoneNo: doc.phoneNo,
         currentLocation: latest || null
       };
     });
