@@ -21,7 +21,7 @@ export const addForm = async (c) => {
   try {
     const uri = c.env.MONGODB_URI;
     const {
-      mobileNumber,
+      mobileNumber: topLevelMobile,
       customerDetails,
       customerRequirements,
       safetyAndInstallation,
@@ -31,6 +31,12 @@ export const addForm = async (c) => {
       remarks,
       signatures
     } = await c.req.json();
+
+    const mobileNumber = topLevelMobile || customerDetails?.mobileNumber;
+
+    if (!mobileNumber) {
+      return c.json({ error: "Mobile number is required!" }, 400);
+    }
 
     await withDatabase(uri, async (db) => {
       const existing = await db.collection("forms").findOne({ mobileNumber: mobileNumber });
