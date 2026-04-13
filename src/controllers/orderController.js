@@ -38,7 +38,6 @@ function getTodayDate() {
     .replace(/-/g, "");
 }
 
-// ─── Send FCM Notification ─────────────────────────────────────────────────
 const sendFCMNotification = async (fcmToken, customerData, distance, c) => {
   try {
     const bearerToken = c.env.FCM_BEARER_TOKEN;
@@ -54,6 +53,14 @@ const sendFCMNotification = async (fcmToken, customerData, distance, c) => {
           title: "New Order Nearby!",
           body: `A customer is ${distStr} km away from you. Tap to accept.`
         },
+        // --- Added Android Specific Config for Custom Sound ---
+        android: {
+          notification: {
+            sound: "kondaas",                // Refers to kondaas.mp3 in the app's raw folder
+            channel_id: "custom_sound_channel_v2" // Matches the channel created in the app
+          }
+        },
+        // ------------------------------------------------------
         data: {
           type: "new_order",
           customerName: String(customerData.name || "New Customer"),
@@ -73,7 +80,7 @@ const sendFCMNotification = async (fcmToken, customerData, distance, c) => {
     });
 
     if (response.ok) {
-      console.log("✅ FCM Sent");
+      console.log("✅ FCM Sent with Custom Sound");
       return true;
     } else {
       const errorText = await response.text();
@@ -86,7 +93,7 @@ const sendFCMNotification = async (fcmToken, customerData, distance, c) => {
   }
 };
 
-// ─── Main addOrder Function (with Hardcoded FCM for Testing) ───────────────
+
 export const addOrder = async (c) => {
   try {
     const uri = c.env.MONGODB_URI;
@@ -105,9 +112,9 @@ export const addOrder = async (c) => {
       address
     } = body;
 
-    // 1. Save Lead with status: "unaccepted" and Date-only "createdAt"
+    // 1. Save Lead with status: "unaccepted"
     const lead = await withDatabase(uri, async (db) => {
-      // Formats date to "YYYY-MM-DD" based on IST
+      // We still use dashes for the database record to keep it readable (YYYY-MM-DD)
       const todayDateOnly = new Date().toLocaleDateString("en-CA", { 
         timeZone: "Asia/Kolkata" 
       });
@@ -124,7 +131,7 @@ export const addOrder = async (c) => {
         longitude: longitude || null,
         address: address || null,
         status: "unaccepted",
-        createdAt: todayDateOnly, // Stores "2026-04-08"
+        createdAt: todayDateOnly, 
       });
 
       return {
@@ -136,14 +143,13 @@ export const addOrder = async (c) => {
       };
     });
 
-    console.log(`✅ New lead created with ID: ${lead._id} for date: ${new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })}`);
+    console.log(`✅ New lead created with ID: ${lead._id}`);
 
     // 2. Nearest Worker Assignment + Notification
     if (latitude && longitude) {
-      // Matches the format "YYYYMMDD" used in your location controller
-      const todayKey = new Date()
-        .toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })
-        .replace(/-/g, "");
+      // --- UPDATED: Now using your safety function ---
+      const todayKey = getTodayDate(); // Generates "20260413"
+      // -----------------------------------------------
 
       const activeWorkers = await withDatabase(uri, async (db) => {
         return await db.collection("locations")
@@ -178,19 +184,18 @@ export const addOrder = async (c) => {
           .filter(Boolean);
 
         if (workersWithDistance.length > 0) {
-          // Sort to find the closest worker
           workersWithDistance.sort((a, b) => a.distance - b.distance);
           const nearestWorker = workersWithDistance[0];
 
-          // Your hardcoded test token
-          const testFcmToken = "c1pePrTrQpy-QP_LMXnkw_:APA91bHB7ZPDY_T9OufKIYYh6yWeTE_TyajUrTa-51x9C_yect2_HstZrof_Vitd1_PvgCCJ8tfwmT2dmxekga7KVhtCqMHHC67tKaY4woHZbK82mxTmKwA";
+          // Your test token
+          const testFcmToken = "dTSLlagcSGaaUL1E06SWKk:APA91bEAdMbrGXCHfyAn3lP7LRVVNYc5y4tGelSc9oy4qkW_QRNJBE-jwPB0-EDH3bNyUFJvRUpMjwBC2kXcWIBqTlTn9oX_8nAnsYk4gOwAKsJQIYXHKz8";
 
           const customerData = {
             name: lead.name,
             mobile: lead.mobile
           };
 
-          // Send the notification
+          // Trigger the FCM with the custom sound logic we just added
           await sendFCMNotification(testFcmToken, customerData, nearestWorker.distance, c);
         }
       }
@@ -203,6 +208,62 @@ export const addOrder = async (c) => {
 
   } catch (err) {
     console.error("addOrder error:", err.message);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+};
+
+
+
+
+export const rejectOrder = async (c) => {
+  try {
+    const uri = c.env.MONGODB_URI;
+    const boardToken = c.env.BOARD_API_TOKEN;
+    const { mobile, reason } = await c.req.json();
+
+    if (!mobile || !reason) {
+      return c.json({ error: "Mobile and reason are required" }, 400);
+    }
+
+    return await withDatabase(uri, async (db) => {
+      // 1. Just FETCH the Lead details to get the Name (No update)
+      const lead = await db.collection("lead").findOne({ mobile });
+      
+      if (!lead) return c.json({ error: "Lead not found in local DB" }, 404);
+
+      const customerName = lead.name || "Unknown";
+
+      // 2. Prepare Board API Payload
+      const boardUrl = "https://board.trisentrix.com/api/boards/MdwEaR2BjBaFJcG6P/lists/Lv8QCE5vvBn4H7XRz/cards";
+      
+      const payload = {
+        authorId: "na9Foqu5XL6YfX2kv", 
+        swimlaneId: "fxPfDfFn9wArHSp6M",
+        title: `${customerName} - ${mobile}`,
+        description: `Reject Reason: ${reason}\n Phone: ${mobile}\n Name: ${customerName}`
+      };
+
+      // 3. Post to External Board
+      const boardResponse = await fetch(boardUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${boardToken.trim()}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (boardResponse.ok) {
+        return c.json({ message: "Successfully posted to Trisentrix Board" });
+      } else {
+        const errorText = await boardResponse.text();
+        console.error(`❌ Board Error: ${boardResponse.status} - ${errorText}`);
+        return c.json({ error: "Board sync failed" }, 500);
+      }
+    });
+
+  } catch (err) {
+    console.error("rejectOrder error:", err.message);
     return c.json({ error: "Internal server error" }, 500);
   }
 };
