@@ -42,7 +42,10 @@ function getTodayDate() {
 // --- UPDATED: Takes bearerToken as an argument now ---
 const sendFCMNotification = async (deviceToken, customerData, distance, bearerToken, leadId) => {
   try {
-    if (!bearerToken || !deviceToken) return false;
+    if (!bearerToken || !deviceToken) {
+      console.error("❌ Missing FCM Token or Bearer Token");
+      return false;
+    }
 
     const distStr = typeof distance === 'number' ? distance.toFixed(1) : "0.0";
 
@@ -59,7 +62,6 @@ const sendFCMNotification = async (deviceToken, customerData, distance, bearerTo
             channel_id: "custom_sound_channel_v2",
             click_action: "LEAD_NOTIFICATION_ACTION" 
           },
-          // ✅ Action buttons for the notification drawer
           actions: [
             {
               action: "ACTION_ACCEPT",
@@ -76,7 +78,7 @@ const sendFCMNotification = async (deviceToken, customerData, distance, bearerTo
           customerName: String(customerData.name || "New Customer"),
           distance: distStr,
           customerMobile: String(customerData.mobile || ""),
-          // ✅ Critical: Pass the leadId so the app knows which record to update
+          // ✅ leadId is now correctly received here
           leadId: leadId ? leadId.toString() : ""
         }
       }
@@ -91,6 +93,9 @@ const sendFCMNotification = async (deviceToken, customerData, distance, bearerTo
       body: JSON.stringify(payload)
     });
 
+    const result = await response.json();
+    if (!response.ok) console.error("FCM Error Response:", result);
+    
     return response.ok;
   } catch (err) {
     console.error("❌ FCM Exception:", err.message);
@@ -100,7 +105,7 @@ const sendFCMNotification = async (deviceToken, customerData, distance, bearerTo
 
 export const addOrder = async (c) => {
   try {
-   const uri = c.env?.MONGODB_URI || process.env.MONGODB_URI;;
+    const uri = c.env?.MONGODB_URI || process.env.MONGODB_URI;
     const body = await c.req.json();
 
     const {
@@ -109,7 +114,6 @@ export const addOrder = async (c) => {
     } = body;
 
     return await withDatabase(uri, async (db) => {
-      // Fetch DB keys
       const keys = await getSystemKeys(db);
 
       const todayDateOnly = new Date().toLocaleDateString("en-CA", { 
@@ -126,7 +130,6 @@ export const addOrder = async (c) => {
 
       const leadId = result.insertedId;
 
-      // Nearest Worker Assignment
       if (latitude && longitude) {
         const todayKey = getTodayDate();
         const activeWorkers = await db.collection("locations")
@@ -155,14 +158,15 @@ export const addOrder = async (c) => {
             workersWithDistance.sort((a, b) => a.distance - b.distance);
             const nearestWorker = workersWithDistance[0];
 
-            // Use test token for now, but use FCM token from DB keys
-            const testFcmToken = "dnx51i6KSyGyzPEkzkPULc:APA91bHYSj5-Mzjll7O8do5S5NKpDmQ4045Kzf1u9goHnI8Eo3_PYNNpzblYIX8_ysN_zzuxqypZALgx61Cl8t-KsW1D9JuGv0BaW1yTIWN1x_T7m_VDy0M";
+            const testFcmToken = "f7SF-UbQQjiHLj4kRGFcXD:APA91bG9euCGFMzOyQpvIRhIohMpK9vjRmaijh4s2DafmjPpK73lcaD5M5U_-b2w9BNrFx5-ZbRytCj2RDLPZldWG5X6zhlvNBnmoZTCqneLGPF24PAJElQ";
             
+            // ✅ UPDATED: Now passing leadId as the 5th argument
             await sendFCMNotification(
                 testFcmToken, 
                 { name, mobile }, 
                 nearestWorker.distance, 
-                keys.firebase.fcmToken
+                keys.firebase.fcmToken,
+                leadId 
             );
           }
         }
