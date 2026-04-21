@@ -1,21 +1,8 @@
-import { MongoClient } from 'mongodb';
-import { getSystemKeys } from '../utils/config.js';
+import { withDatabase,getSystemKeys } from '../utils/config.js'; 
 
 
-const withDatabase = async (uri, fn) => {
-  const client = new MongoClient(uri, {
-    maxPoolSize: 1,
-    minPoolSize: 0,
-    serverSelectionTimeoutMS: 5000,
-  });
-  try {
-    await client.connect();
-    const db = client.db("Kondaas");
-    return await fn(db);
-  } finally {
-    await client.close(true);
-  }
-};
+
+
 const SOLARMAN_BASE_URL = "https://globalapi.solarmanpv.com";
 
 export const getSolarmanToken = async (c) => {

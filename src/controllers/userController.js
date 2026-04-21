@@ -1,23 +1,5 @@
-import { MongoClient } from 'mongodb';
+import { withDatabase } from '../utils/config.js';
 
-
-
-const withDatabase = async (uri, fn) => {
-  const client = new MongoClient(uri, {
-    maxPoolSize: 1,
-    minPoolSize: 0,
-    serverSelectionTimeoutMS: 5000,
-    connectTimeoutMS: 5000,
-    socketTimeoutMS: 5000,
-  });
-  try {
-    await client.connect();
-    const db = client.db("Kondaas");
-    return await fn(db);
-  } finally {
-    await client.close(true);
-  }
-};
 
 export const addForm = async (c) => {
   try {

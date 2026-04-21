@@ -1,21 +1,4 @@
-import { MongoClient, Binary, ObjectId } from 'mongodb';
-
-import { getSystemKeys } from '../utils/config.js';
-
-// --- HELPER: Database Connection (Kept exactly as requested) ---
-const withDatabase = async (uri, fn) => {
-  const client = new MongoClient(uri, {
-    maxPoolSize: 1,
-    serverSelectionTimeoutMS: 5000,
-  });
-  try {
-    await client.connect();
-    const db = client.db("Kondaas");
-    return await fn(db);
-  } finally {
-    await client.close(true);
-  }
-};
+import { withDatabase,Binary,ObjectId,getSystemKeys } from '../utils/config.js'; 
 
 // --- THE WORKER: Background WhatsApp Process ---
 const processWhatsAppNotification = async (notificationId, c) => {
@@ -126,7 +109,20 @@ export const addNotification = async (c) => {
     });
 
     if (mode === "whatsapp") {
-      c.executionCtx.waitUntil(processWhatsAppNotification(notificationId, c));
+      let hasExecutionContext = false;
+      try {
+        if (c.executionCtx) hasExecutionContext = true;
+      } catch (e) {
+        hasExecutionContext = false;
+      }
+
+      if (hasExecutionContext) {
+        c.executionCtx.waitUntil(processWhatsAppNotification(notificationId, c));
+      } else {
+        processWhatsAppNotification(notificationId, c).catch(err => 
+          console.error("Background WhatsApp Error:", err)
+        );
+      }
     }
 
     return c.json({ message: "Notification queued", id: notificationId }, 201);
@@ -170,7 +166,25 @@ export const triggerScenarioNotification = async (c) => {
         createdAt: new Date()
       });
 
-      c.executionCtx.waitUntil(processWhatsAppNotification(notificationResult.insertedId, c));
+      // --- THE BULLETPROOF FIX ---
+      let hasExecutionContext = false;
+      try {
+        // We check if it exists without "accessing" it deeply
+        if (c.executionCtx) hasExecutionContext = true;
+      } catch (e) {
+        hasExecutionContext = false;
+      }
+
+      if (hasExecutionContext) {
+        // Cloudflare Path
+        c.executionCtx.waitUntil(processWhatsAppNotification(notificationResult.insertedId, c));
+      } else {
+        // AWS / Node.js Path
+        // We fire and forget (don't use await) so the response is still fast
+        processWhatsAppNotification(notificationResult.insertedId, c).catch(err => 
+          console.error("Background Notification Error:", err)
+        );
+      }
 
       return c.json({
         message: `Scenario ${scenarioType} queued for ${customerName}`,

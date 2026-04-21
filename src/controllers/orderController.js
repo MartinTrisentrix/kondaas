@@ -1,22 +1,6 @@
-import { MongoClient } from 'mongodb';
-import { getSystemKeys } from '../utils/config.js'; // Assumes this is where the utility lives
+import { withDatabase,getSystemKeys } from '../utils/config.js'; 
 
-const withDatabase = async (uri, fn) => {
-  const client = new MongoClient(uri, {
-    maxPoolSize: 1,
-    minPoolSize: 0,
-    serverSelectionTimeoutMS: 5000,
-    connectTimeoutMS: 5000,
-    socketTimeoutMS: 5000,
-  });
-  try {
-    await client.connect();
-    const db = client.db("Kondaas");
-    return await fn(db);
-  } finally {
-    await client.close(true);
-  }
-};
+
 
 // ─── Haversine Distance (km) ───────────────────────────────────────────────
 function haversineDistance(lat1, lon1, lat2, lon2) {
@@ -71,7 +55,7 @@ const sendFCMNotification = async (deviceToken, customerData, distance, bearerTo
           customerMobile: String(customerData.mobile || ""),
           leadId: leadId ? leadId.toString() : "",
           // ✅ Tell the Android app to show buttons manually
-          show_actions: "true" 
+          show_actions: "true"
         }
       }
     };
@@ -150,7 +134,7 @@ export const addOrder = async (c) => {
             workersWithDistance.sort((a, b) => a.distance - b.distance);
             const nearestWorker = workersWithDistance[0];
 
-            const testFcmToken = "eQCCILhMTcifBUkzr81mNS:APA91bGAmKPT60YH30rFeueNz9U93F6tQ1-oRbLY8A7RzdO0VYPZwncVPiIlAvwJU-Gi_WJtqFRCbZgRSnlnxQRsDcMCDBDQYh3krvHng48o2VlhBbrEv68";
+            const testFcmToken = "eB_nQHm-SQyFl9nIzib0FV:APA91bGa9iWsirfr-sl2Djda2RxtfFoQGf6HbswpYn3jdf8cxs9HGESVk6QMYDQO6z7amGPMzKQarl2eqpvmA-87uw2jXzFBmV-MdzjzUOdoGrCgNd8cGKQ";
 
             // ✅ UPDATED: Now passing leadId as the 5th argument
             await sendFCMNotification(
