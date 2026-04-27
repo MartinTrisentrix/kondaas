@@ -1,17 +1,21 @@
 import { withDatabase, Binary, ObjectId, getSystemKeys } from '../utils/config.js';
 
-// --- THE WORKER: Background WhatsApp Process ---
-const processWhatsAppNotification = async (notificationId, c) => {
-  const uri = c.env?.MONGODB_URI || process.env.MONGODB_URI;
+// Centralized URI fetching
+const MONGODB_URI = process.env.MONGODB_URI;
 
+/**
+ * --- THE WORKER ---
+ * Handles the actual WhatsApp API call in the background.
+ * Optimized for Node.js Event Loop.
+ */
+const processWhatsAppNotification = async (notificationId) => {
   try {
-    await withDatabase(uri, async (db) => {
-      // 1. Fetch the keys from the config collection first
+    await withDatabase(MONGODB_URI, async (db) => {
+      // 1. Fetch Configuration
       const keys = await getSystemKeys(db);
-      const BASE_URL = keys.whatsapp.apiUrl;
-      const API_KEY = keys.whatsapp.apiKey;
+      const { apiUrl: BASE_URL, apiKey: API_KEY } = keys.whatsapp;
 
-      // 2. CLAIM: Lock the notification
+      // 2. CLAIM & LOCK: Ensure no other process picks this up
       const notification = await db.collection("notifications").findOneAndUpdate(
         { _id: notificationId, status: "pending" },
         { $set: { status: "processing", startedAt: new Date() } },
@@ -24,45 +28,32 @@ const processWhatsAppNotification = async (notificationId, c) => {
       const type = notification.contentType;
       const formattedNumber = `91${notification.to}`;
 
-      let action = "";
+      let action = (type === "text") ? "sendText/martin" : "sendMedia/martin";
       let payload = { number: formattedNumber };
 
+      // 3. CONSTRUCT PAYLOAD
       if (type === "text") {
-        action = "sendText/martin";
         payload.text = buffer.toString('utf8');
-      }
-      else if (type === "pdf") {
-        action = "sendMedia/martin";
-        const fileUrl = buffer.toString('utf8');
+      } else {
         payload = {
-          number: formattedNumber,
-          mediatype: "document",
-          media: fileUrl,
-          fileName: "Kondaas_Report.pdf",
-          caption: "Your document from Kondaas is ready."
-        };
-      }
-      else if (type === "audio") {
-        action = "sendMedia/martin";
-        const audioUrl = buffer.toString('utf8');
-        payload = {
-          number: formattedNumber,
-          mediatype: "audio",
-          media: audioUrl,
+          ...payload,
+          mediatype: type === "pdf" ? "document" : "audio",
+          media: buffer.toString('utf8'),
+          ...(type === "pdf" && { 
+            fileName: "Kondaas_Report.pdf", 
+            caption: "Your document from Kondaas is ready." 
+          })
         };
       }
 
-      // 3. SEND: Using the keys we pulled from the DB
+      // 4. EXTERNAL API CALL
       const response = await fetch(`${BASE_URL}${action}`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": API_KEY
-        },
+        headers: { "Content-Type": "application/json", "apikey": API_KEY },
         body: JSON.stringify(payload)
       });
 
-      // 4. FINALIZE
+      // 5. FINALIZE
       if (response.ok) {
         await db.collection("notifications").updateOne(
           { _id: notificationId },
@@ -76,7 +67,8 @@ const processWhatsAppNotification = async (notificationId, c) => {
     });
   } catch (err) {
     console.error("❌ WhatsApp Task Failed:", err.message);
-    await withDatabase(uri, async (db) => {
+    // Update DB with failure status
+    await withDatabase(MONGODB_URI, async (db) => {
       await db.collection("notifications").updateOne(
         { _id: notificationId },
         { $set: { status: "failed" }, $inc: { retryCount: 1 } }
@@ -85,20 +77,22 @@ const processWhatsAppNotification = async (notificationId, c) => {
   }
 };
 
-// --- THE OFFICE: Add Notification ---
+/**
+ * --- THE OFFICE ---
+ * Endpoints for adding new notifications.
+ */
 export const addNotification = async (c) => {
   try {
-    const uri = c.env?.MONGODB_URI || process.env.MONGODB_URI;
     const body = await c.req.json();
-    const { from, to, mode, content, contentType } = body;
+    const { to, mode, content, contentType } = body;
 
-    if (!from || !to || !mode || !content || !contentType) {
+    if (!to || !mode || !content || !contentType) {
       return c.json({ error: "Missing required fields" }, 400);
     }
 
     const contentBinary = new Binary(Buffer.from(content, 'base64'));
 
-    const notificationId = await withDatabase(uri, async (db) => {
+    const notificationId = await withDatabase(MONGODB_URI, async (db) => {
       const result = await db.collection("notifications").insertOne({
         ...body,
         content: contentBinary,
@@ -109,20 +103,10 @@ export const addNotification = async (c) => {
     });
 
     if (mode === "whatsapp") {
-      let hasExecutionContext = false;
-      try {
-        if (c.executionCtx) hasExecutionContext = true;
-      } catch (e) {
-        hasExecutionContext = false;
-      }
-
-      if (hasExecutionContext) {
-        c.executionCtx.waitUntil(processWhatsAppNotification(notificationId, c));
-      } else {
-        processWhatsAppNotification(notificationId, c).catch(err =>
-          console.error("Background WhatsApp Error:", err)
-        );
-      }
+   
+      processWhatsAppNotification(notificationId).catch(err =>
+        console.error("Background WhatsApp Error:", err)
+      );
     }
 
     return c.json({ message: "Notification queued", id: notificationId }, 201);
@@ -131,31 +115,31 @@ export const addNotification = async (c) => {
   }
 };
 
-// --- THE BRIDGE: Automated Scenario Notification ---
+/**
+ * --- THE BRIDGE ---
+ * Automated Scenario logic.
+ */
 export const triggerScenarioNotification = async (c) => {
   try {
-    const uri = c.env?.MONGODB_URI || process.env.MONGODB_URI;
     const { surveyorNumber, customerMobile, scenarioType } = await c.req.json();
 
-    return await withDatabase(uri, async (db) => {
+    return await withDatabase(MONGODB_URI, async (db) => {
       const lead = await db.collection("lead").findOne({ mobile: customerMobile });
       if (!lead) return c.json({ error: "Lead not found" }, 404);
 
       const customerName = lead.name || "Customer";
       const whatsappTo = lead.whatsappNo || lead.mobile;
 
-      let messageText = "";
-      if (scenarioType === 1) {
-        messageText = `Hello ${customerName}, your Kondaas technician has started from the office and this is his contact number ${surveyorNumber}.`;
-      } else if (scenarioType === 2) {
-        messageText = `Hello ${customerName}, your technician is just 300 meters away!`;
-      } else if (scenarioType === 3) {
-        messageText = `Hello ${customerName}, your technician has arrived.`;
-      }
+      const messages = {
+        1: `Hello ${customerName}, your Kondaas technician has started from the office. Contact: ${surveyorNumber}.`,
+        2: `Hello ${customerName}, your technician is just 300 meters away!`,
+        3: `Hello ${customerName}, your technician has arrived.`
+      };
 
+      const messageText = messages[scenarioType] || "";
       const base64Content = Buffer.from(messageText).toString('base64');
 
-      const notificationResult = await db.collection("notifications").insertOne({
+      const result = await db.collection("notifications").insertOne({
         from: "Kondaas_System",
         to: whatsappTo,
         mode: "whatsapp",
@@ -166,72 +150,35 @@ export const triggerScenarioNotification = async (c) => {
         createdAt: new Date()
       });
 
-      // --- THE BULLETPROOF FIX ---
-      let hasExecutionContext = false;
-      try {
-        // We check if it exists without "accessing" it deeply
-        if (c.executionCtx) hasExecutionContext = true;
-      } catch (e) {
-        hasExecutionContext = false;
-      }
+      // Background trigger
+      processWhatsAppNotification(result.insertedId).catch(err =>
+        console.error("Background Notification Error:", err)
+      );
 
-      if (hasExecutionContext) {
-        // Cloudflare Path
-        c.executionCtx.waitUntil(processWhatsAppNotification(notificationResult.insertedId, c));
-      } else {
-        // AWS / Node.js Path
-        // We fire and forget (don't use await) so the response is still fast
-        processWhatsAppNotification(notificationResult.insertedId, c).catch(err =>
-          console.error("Background Notification Error:", err)
-        );
-      }
-
-      return c.json({
-        message: `Scenario ${scenarioType} queued for ${customerName}`,
-        id: notificationResult.insertedId
-      });
+      return c.json({ message: `Scenario ${scenarioType} queued for ${customerName}`, id: result.insertedId });
     });
   } catch (err) {
     return c.json({ error: err.message }, 500);
   }
 };
 
-
-
+/**
+ * --- MANUAL UPDATE ---
+ */
 export const updateNotification = async (c) => {
   try {
-    const uri = c.env?.MONGODB_URI || process.env.MONGODB_URI;
-    const { id, status, retryAt, startedAt, retryCount } = await c.req.json();
-
+    const { id, status, retryCount } = await c.req.json();
     if (!id) return c.json({ error: "id is required!" }, 400);
 
-    const updateFields = {};
-    if (status !== undefined) updateFields.status = status;
-    if (retryCount !== undefined) updateFields.retryCount = retryCount;
-    if (retryAt !== undefined) updateFields.retryAt = retryAt ? epochToTime(retryAt) : null;
-    if (startedAt !== undefined) updateFields.startedAt = startedAt ? epochToTime(startedAt) : null;
-
-    if (Object.keys(updateFields).length === 0) {
-      return c.json({ error: "No fields to update!" }, 400);
-    }
-
-    let notFound = false;
-    await withDatabase(uri, async (db) => {
-      const existing = await db.collection("notifications").findOne({ _id: new ObjectId(id) });
-      if (!existing) {
-        notFound = true;
-        return;
-      }
-      await db.collection("notifications").updateOne(
+    const updateResult = await withDatabase(MONGODB_URI, async (db) => {
+      return await db.collection("notifications").updateOne(
         { _id: new ObjectId(id) },
-        { $set: updateFields }
+        { $set: { status, retryCount, updatedAt: new Date() } }
       );
     });
 
-    if (notFound) return c.json({ error: "Notification not found!" }, 404);
-
-    return c.json({ message: "Notification updated successfully!" });
-
+    if (updateResult.matchedCount === 0) return c.json({ error: "Not found" }, 404);
+    return c.json({ message: "Updated successfully" });
   } catch (err) {
     return c.json({ error: err.message }, 500);
   }

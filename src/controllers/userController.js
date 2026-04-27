@@ -1,37 +1,30 @@
 import { withDatabase } from '../utils/config.js';
 
+const MONGODB_URI = process.env.MONGODB_URI;
 
 export const addForm = async (c) => {
   try {
-    const uri = c.env?.MONGODB_URI || process.env.MONGODB_URI;
     const body = await c.req.json();
-
     const mobileNumber = body.mobileNumber || body.customerDetails?.mobileNumber;
 
     if (!mobileNumber) {
       return c.json({ error: "Mobile number is required!" }, 400);
     }
 
-  
-    let alreadyExists = false;
-    await withDatabase(uri, async (db) => {
+    return await withDatabase(MONGODB_URI, async (db) => {
       const existing = await db.collection("forms").findOne({ mobileNumber });
+      
       if (existing) {
-        alreadyExists = true;
-        return;
+        return c.json({ error: "Mobile number already registered!" }, 400);
       }
+
       await db.collection("forms").insertOne({
         mobileNumber,
         ...body
       });
+
+      return c.json({ message: "Form submitted successfully!" }, 201);
     });
-
-    if (alreadyExists) {
-      return c.json({ error: "Mobile number already registered!" }, 400);
-    }
-
-    return c.json({ message: "Form submitted successfully!" }, 201);
-
   } catch (err) {
     return c.json({ error: err.message }, 500);
   }
@@ -39,35 +32,22 @@ export const addForm = async (c) => {
 
 export const updateForm = async (c) => {
   try {
-    const uri = c.env?.MONGODB_URI || process.env.MONGODB_URI;
     const body = await c.req.json();
-    const mobileNumber = body.mobileNumber;
+    const { mobileNumber } = body;
 
-   
-    let notFound = false;
-    await withDatabase(uri, async (db) => {
-      const existing = await db.collection("forms").findOne({ mobileNumber });
-      if (!existing) {
-        notFound = true;
-        return;
-      }
-      await db.collection("forms").updateOne(
+    return await withDatabase(MONGODB_URI, async (db) => {
+      // One operation instead of two
+      const result = await db.collection("forms").updateOne(
         { mobileNumber },
-        {
-          $set: {
-            ...body,
-            updatedAt: new Date(),
-          }
-        }
+        { $set: { ...body } }
       );
+
+      if (result.matchedCount === 0) {
+        return c.json({ error: "Mobile number not found!" }, 404);
+      }
+
+      return c.json({ message: "Form updated successfully!" });
     });
-
-    if (notFound) {
-      return c.json({ error: "Mobile number not found!" }, 404);
-    }
-
-    return c.json({ message: "Form updated successfully!" });
-
   } catch (err) {
     return c.json({ error: err.message }, 500);
   }
@@ -75,32 +55,31 @@ export const updateForm = async (c) => {
 
 export const updateMobileNumber = async (c) => {
   try {
-    const uri = c.env?.MONGODB_URI || process.env.MONGODB_URI;
     const { oldMobileNumber, newMobileNumber } = await c.req.json();
 
     if (!oldMobileNumber || !newMobileNumber) {
-      return c.json({ error: "Both old and new mobile numbers are required" }, 400);
+      return c.json({ error: "Both numbers are required" }, 400);
     }
 
-    let result = null;
-    await withDatabase(uri, async (db) => {
-      const oldExists = await db.collection("forms").findOne({ mobileNumber: oldMobileNumber });
-      if (!oldExists) { result = 'not_found'; return; }
-
+    return await withDatabase(MONGODB_URI, async (db) => {
+      // 1. Check if the new number is already taken
       const newExists = await db.collection("forms").findOne({ mobileNumber: newMobileNumber });
-      if (newExists) { result = 'already_taken'; return; }
+      if (newExists) {
+        return c.json({ error: "New mobile number already registered!" }, 400);
+      }
 
-      await db.collection("forms").updateOne(
+      // 2. Perform the swap
+      const result = await db.collection("forms").updateOne(
         { mobileNumber: oldMobileNumber },
         { $set: { mobileNumber: newMobileNumber } }
       );
+
+      if (result.matchedCount === 0) {
+        return c.json({ error: "Old mobile number not found!" }, 404);
+      }
+
+      return c.json({ message: "Mobile number updated successfully!" });
     });
-
-    if (result === 'not_found') return c.json({ error: "Old mobile number not found!" }, 404);
-    if (result === 'already_taken') return c.json({ error: "New mobile number already registered!" }, 400);
-
-    return c.json({ message: "Mobile number updated successfully!" });
-
   } catch (err) {
     return c.json({ error: err.message }, 500);
   }

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { serve } from '@hono/node-server';
 
 import locationRoutes from './src/routes/locationRoutes.js';
 import userRoutes from './src/routes/userRoutes.js';
@@ -12,6 +13,7 @@ const app = new Hono();
 
 app.use('*', cors());
 
+// Routes
 app.route('/location', locationRoutes);
 app.route('/user', userRoutes);
 app.route('/order', orderRoutes);
@@ -19,27 +21,13 @@ app.route('/template', templateRoutes);
 app.route('/notification', notificationRoutes);
 app.route('/solarman', solarmanRoutes);
 
-/**
- * 🐋 DOCKER / NODE RUNNER (The "Ghost" Import)
- */
-if (typeof process !== 'undefined' && process.release?.name === 'node') {
-  // We use a variable for the package name so Cloudflare's bundler ignores it
-  const nodeServerPkg = '@hono/node-server'; 
-  
-  import(nodeServerPkg).then(({ serve }) => {
-    const port = 8080;
-    serve({ 
-      fetch: app.fetch, 
-      port,
-      hostname: '0.0.0.0' // ✅ CRITICAL: Listen on all network interfaces
-    });
-    console.log(`🚀 Docker Mode: http://0.0.0.0:${port}`);
-  }).catch(() => {
-    // Cloudflare will hit this catch block during build and stay silent
-  });
-}
 
-/**
- * ⛅ CLOUDFLARE EXPORT
- */
-export default app;
+const port = 8080;
+
+serve({
+  fetch: app.fetch,
+  port,
+  hostname: '0.0.0.0'
+}, (info) => {
+  console.log(`🚀 Kondaas Backend Live: http://localhost:${info.port}`);
+});
