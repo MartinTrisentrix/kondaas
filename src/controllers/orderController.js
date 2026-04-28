@@ -24,17 +24,21 @@ const getISTDateStrings = () => {
   return { todayDateOnly, todayKey };
 };
 
-const sendFCMNotification = async (deviceToken, customerData, distance, bearerToken, leadId) => {
+// 1. Updated FCM function to include kilovolt in the message
+const sendFCMNotification = async (deviceToken, customerData, bearerToken, leadId, kilovolt, address) => {
   try {
     if (!bearerToken || !deviceToken) return false;
 
-    const distStr = typeof distance === 'number' ? distance.toFixed(1) : "0.0";
+    const kvInfo = kilovolt ? ` [${kilovolt}]` : "";
+    const addrInfo = address ? ` at ${address}` : "";
+
     const payload = {
       message: {
         token: deviceToken,
         notification: {
-          title: "New Lead Nearby!",
-          body: `A customer is ${distStr} km away. Tap to accept.`
+          title: "New Lead Assigned!",
+          // Result: "Customer: Rajesh [11kV] at Medavakkam. Tap to accept."
+          body: `Customer: ${customerData.name}${kvInfo}${addrInfo}. Tap to accept.`
         },
         android: {
           notification: {
@@ -46,9 +50,10 @@ const sendFCMNotification = async (deviceToken, customerData, distance, bearerTo
         data: {
           type: "new_order",
           customerName: String(customerData.name || "New Customer"),
-          distance: distStr,
           customerMobile: String(customerData.mobile || ""),
           leadId: leadId ? leadId.toString() : "",
+          kilovolt: kilovolt ? String(kilovolt) : "",
+          address: address || "",
           show_actions: "true"
         }
       }
@@ -73,23 +78,58 @@ const sendFCMNotification = async (deviceToken, customerData, distance, bearerTo
 export const addOrder = async (c) => {
   try {
     const body = await c.req.json();
-    const { name, mobile, whatsappNo, email, city, comment, referredBy, latitude, longitude, address } = body;
+    const { name, mobile, whatsappNo, email, city, comment, referredBy, latitude, longitude, address, kilovolt } = body;
 
     return await withDatabase(MONGODB_URI, async (db) => {
+      // 1. Get Keys (Now using flowtrix object per your screenshot)
       const keys = await getSystemKeys(db);
       const { todayDateOnly, todayKey } = getISTDateStrings();
 
+      // 2. Save Lead to MongoDB (All fields)
       const result = await db.collection("lead").insertOne({
-        name, mobile, whatsappNo: whatsappNo || null,
-        email: email || null, city, comment, referredBy,
-        latitude: latitude || null, longitude: longitude || null,
-        address: address || null, status: "unaccepted",
+        name,
+        mobile,
+        whatsappNo: whatsappNo || null,
+        email: email || null,
+        city,
+        comment,
+        referredBy,
+        latitude: latitude || null,
+        longitude: longitude || null,
+        address: address || null,
+        kilovolt: kilovolt || null,
+        status: "unaccepted",
         createdAt: todayDateOnly,
       });
 
       const leadId = result.insertedId;
 
-      // Distance matching logic
+      // 3. Sync to Flowtrix Board (Name & Phone only)
+      // Updated: now pulls from keys.flowtrix.boardToken
+      const dbBoardToken = keys.flowtrix?.boardToken?.trim();
+
+      if (dbBoardToken) {
+        try {
+          await fetch("http://flowtrix:8080/api/boards/kALDJ4Yi9Q78wuDnZ/lists/rGsxfBXrLqm7b8M4f/cards", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${dbBoardToken}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              title: `${name} - ${mobile}`,
+              description: `New Entry\n Phone: ${mobile}\n Name: ${name}`,
+              authorId: "rithikuser001",
+              swimlaneId: "qWzLaocWgSMpBBS6z"
+            })
+          });
+          console.log("✅ Flowtrix Board Sync Successful");
+        } catch (syncErr) {
+          console.error("❌ Flowtrix Sync failed:", syncErr.message);
+        }
+      }
+
+      // 4. Worker Notification Logic (Maintains KV and Address)
       if (latitude && longitude) {
         const activeWorkers = await db.collection("locations")
           .find({ [todayKey]: { $exists: true } }).toArray();
@@ -113,42 +153,71 @@ export const addOrder = async (c) => {
             const nearestWorker = workersWithDistance[0];
             const testFcmToken = "f34nZKtCR2GC5ZgXsjWUrW:APA91bFNGJrXbRrijqem9SvO7gi4nf4CB34B7czZmH-IJKYHHrXlzfGiid3LH0gjprywq7dFJ7TwKWsyx1ecdCurqLyLxYK-khx8l-yG5pGekDN90g3d6Po";
 
-            await sendFCMNotification(testFcmToken, { name, mobile }, nearestWorker.distance, keys.firebase.fcmToken, leadId);
+            // Notification still sends KV and Address to the mobile app
+            await sendFCMNotification(testFcmToken, { name, mobile }, keys.firebase.fcmToken, leadId, kilovolt, address);
           }
         }
       }
-      return c.json({ message: "Order added successfully!", id: leadId }, 201);
+
+      return c.json({ message: "Order added and synced successfully!", id: leadId }, 201);
     });
   } catch (err) {
     return c.json({ error: "Internal server error" }, 500);
   }
 };
+//removed Reject order//
 
 export const rejectOrder = async (c) => {
   try {
-    const { mobile, reason, surveyorNumber } = await c.req.json();
-    if (!mobile || !reason || !surveyorNumber) return c.json({ error: "Fields missing" }, 400);
+    const { mobile, surveyorNumber, reason } = await c.req.json();
+
+    if (!mobile) {
+      return c.json({ error: "Mobile number is required" }, 400);
+    }
 
     return await withDatabase(MONGODB_URI, async (db) => {
+      // 1. VALIDATION: Check if this lead exists in our DB first
+      const leadExists = await db.collection("lead").findOne({ mobile });
+
+      if (!leadExists) {
+        console.warn(`⚠️ Rejection blocked: Mobile ${mobile} not found in database.`);
+        return c.json({ error: "No lead found with this mobile number. Rejection ignored." }, 404);
+      }
+
+      // 2. Get the token from DB
       const keys = await getSystemKeys(db);
-      const lead = await db.collection("lead").findOne({ mobile });
-      if (!lead) return c.json({ error: "Lead not found" }, 404);
+      const boardToken = keys.flowtrix?.boardToken?.trim();
 
-      const boardResponse = await fetch("https://board.trisentrix.com/api/boards/MdwEaR2BjBaFJcG6P/lists/Lv8QCE5vvBn4H7XRz/cards", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${keys.trisentrix.boardToken.trim()}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          authorId: "na9Foqu5XL6YfX2kv",
-          swimlaneId: "fxPfDfFn9wArHSp6M",
-          title: `${lead.name} - ${mobile} (Surveyor: ${surveyorNumber})`,
-          description: `Reject Reason: ${reason}\n Surveyor: ${surveyorNumber}`
-        })
-      });
+      if (boardToken) {
+        try {
+          // 3. POST to Flowtrix (Now that we know the lead is real)
+          const boardResponse = await fetch("http://flowtrix:8080/api/boards/kALDJ4Yi9Q78wuDnZ/lists/4TP3iFH6AhAoxysuA/cards", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${boardToken}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              title: `${mobile}`,
+              description: `Phone: ${mobile}\n Surveyor number : ${surveyorNumber}\nReject Reason: ${reason}`,
+              authorId: "rithikuser001",
+              swimlaneId: "qWzLaocWgSMpBBS6z"
+            })
+          });
 
-      return boardResponse.ok ? c.json({ message: "Rejected and synced" }) : c.json({ error: "Board sync failed" }, 500);
+          if (boardResponse.ok) {
+            console.log(`✅ Rejection synced for verified lead: ${mobile}`);
+            return c.json({ message: "Rejected and synced successfully" });
+          } else {
+            return c.json({ error: "Board sync failed" }, 500);
+          }
+        } catch (syncErr) {
+          console.error("❌ Network Error reaching Flowtrix:", syncErr.message);
+          return c.json({ error: "Flowtrix API unreachable" }, 500);
+        }
+      }
+
+      return c.json({ error: "Authentication token not found" }, 500);
     });
   } catch (err) {
     return c.json({ error: "Internal server error" }, 500);
@@ -194,7 +263,7 @@ export const updateOrder = async (c) => {
       if (!existing) return c.json({ error: "Order not found!" }, 404);
 
       const { name, whatsappNo, email, city, comment, referredBy, latitude, longitude, address } = body;
-      
+
       await db.collection("lead").updateOne(
         { mobile },
         { $set: { name, whatsappNo: whatsappNo || null, email: email || null, city, comment, referredBy, latitude, longitude, address } }

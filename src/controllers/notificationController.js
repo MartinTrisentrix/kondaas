@@ -11,7 +11,7 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const processWhatsAppNotification = async (notificationId) => {
   try {
     await withDatabase(MONGODB_URI, async (db) => {
-      // 1. Fetch Configuration
+      // 1. Fetch Configuration        
       const keys = await getSystemKeys(db);
       const { apiUrl: BASE_URL, apiKey: API_KEY } = keys.whatsapp;
 
