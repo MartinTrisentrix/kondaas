@@ -165,7 +165,7 @@ export const addOrder = async (c) => {
     return c.json({ error: "Internal server error" }, 500);
   }
 };
-//removed Reject order//
+
 
 export const rejectOrder = async (c) => {
   try {
@@ -224,34 +224,137 @@ export const rejectOrder = async (c) => {
   }
 };
 
+
 export const completeOrder = async (c) => {
   try {
     const { mobile, surveyorNumber } = await c.req.json();
+    
     return await withDatabase(MONGODB_URI, async (db) => {
       const keys = await getSystemKeys(db);
       const lead = await db.collection("lead").findOne({ mobile });
+      
       if (!lead) return c.json({ error: "Lead not found" }, 404);
 
-      const boardResponse = await fetch("https://board.trisentrix.com/api/boards/MdwEaR2BjBaFJcG6P/lists/uWQW5XKbrMZESKKMv/cards", {
+      // CHANGED: Use flowtrix instead of trisentrix
+      const token = keys?.flowtrix?.boardToken;
+      
+      if (!token) return c.json({ error: "Flowtrix board token missing in DB" }, 500);
+
+      const boardResponse = await fetch("https://smugger-milagros-semblably.ngrok-free.dev/api/boards/xJQn5HmYG4P6n6ijY/lists/drznJ9DKKkhiZ4FGp/cards", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${keys.trisentrix.boardToken.trim()}`,
+          "Authorization": `Bearer ${token.trim()}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          authorId: "na9Foqu5XL6YfX2kv",
-          swimlaneId: "fxPfDfFn9wArHSp6M",
+          authorId: "LeuLZuxmRPqH3hY3o",
+          swimlaneId: "24SZXeX95zNYKrsno",
           title: `${lead.name} - ${mobile}`,
-          description: `Completed by Surveyor: ${surveyorNumber}`
+          description: `Completed\n Phone: ${mobile}\n Surveyor number : ${surveyorNumber}` 
         })
       });
 
-      return boardResponse.ok ? c.json({ message: "Completed and synced" }) : c.json({ error: "Board sync failed" }, 500);
+      if (boardResponse.ok) {
+        return c.json({ message: "Completed and synced locally" });
+      } else {
+        const errorData = await boardResponse.text();
+        console.error("Board sync failed:", errorData);
+        return c.json({ error: "Board sync failed" }, 500);
+      }
     });
   } catch (err) {
+    console.error("Internal server error:", err);
     return c.json({ error: "Internal server error" }, 500);
   }
 };
+
+export const acceptOrder = async (c) => {
+  try {
+    const { mobile, surveyorNumber } = await c.req.json();
+    
+    return await withDatabase(MONGODB_URI, async (db) => {
+      const keys = await getSystemKeys(db);
+      const lead = await db.collection("lead").findOne({ mobile });
+      
+      if (!lead) return c.json({ error: "Lead not found" }, 404);
+
+      // CHANGED: Use flowtrix instead of trisentrix
+      const token = keys?.flowtrix?.boardToken;
+      
+      if (!token) return c.json({ error: "Flowtrix board token missing in DB" }, 500);
+
+      const boardResponse = await fetch("https://smugger-milagros-semblably.ngrok-free.dev/api/boards/xJQn5HmYG4P6n6ijY/lists/tnkdQ39jEmyFobgAF/cards", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token.trim()}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          authorId: "LeuLZuxmRPqH3hY3o",
+          swimlaneId: "24SZXeX95zNYKrsno",
+          title: `${lead.name} - ${mobile}`,
+          description: `Accepted\n Phone: ${mobile}\n Surveyor number : ${surveyorNumber}` 
+        })
+      });
+
+      if (boardResponse.ok) {
+        return c.json({ message: "Completed and synced locally" });
+      } else {
+        const errorData = await boardResponse.text();
+        console.error("Board sync failed:", errorData);
+        return c.json({ error: "Board sync failed" }, 500);
+      }
+    });
+  } catch (err) {
+    console.error("Internal server error:", err);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+};
+
+export const inprogressOrder = async (c) => {
+  try {
+    const { mobile, surveyorNumber } = await c.req.json();
+    
+    return await withDatabase(MONGODB_URI, async (db) => {
+      const keys = await getSystemKeys(db);
+      const lead = await db.collection("lead").findOne({ mobile });
+      
+      if (!lead) return c.json({ error: "Lead not found" }, 404);
+
+      // CHANGED: Use flowtrix instead of trisentrix
+      const token = keys?.flowtrix?.boardToken;
+      
+      if (!token) return c.json({ error: "Flowtrix board token missing in DB" }, 500);
+
+      const boardResponse = await fetch("https://smugger-milagros-semblably.ngrok-free.dev/api/boards/xJQn5HmYG4P6n6ijY/lists/7ZH3sbjMTCj4kBDgM/cards", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token.trim()}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          authorId: "LeuLZuxmRPqH3hY3o",
+          swimlaneId: "24SZXeX95zNYKrsno",
+          title: `${lead.name} - ${mobile}`,
+          description: `Inprogress\n Phone: ${mobile}\n Surveyor number : ${surveyorNumber}` 
+        })
+      });
+
+      if (boardResponse.ok) {
+        return c.json({ message: "Completed and synced locally" });
+      } else {
+        const errorData = await boardResponse.text();
+        console.error("Board sync failed:", errorData);
+        return c.json({ error: "Board sync failed" }, 500);
+      }
+    });
+  } catch (err) {
+    console.error("Internal server error:", err);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+};
+
+
 
 export const updateOrder = async (c) => {
   try {
