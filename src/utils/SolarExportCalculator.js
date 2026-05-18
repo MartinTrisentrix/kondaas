@@ -1,6 +1,4 @@
-
 class SolarExportCalculator {
-
   static calculateMonthlyCredit(units, tariffTemplate) {
     if (!units || units <= 0) return 0;
     if (!tariffTemplate) return 0;
@@ -14,7 +12,7 @@ class SolarExportCalculator {
       const telescopic = slabs?.telescopic_up_to_250 || [];
       const nonTelescopic = slabs?.non_telescopic_above_250 || [];
 
-      // Determine the threshold from the last telescopic slab (usually 250)
+      // Determine threshold (standard 250)
       let threshold = 250;
       if (telescopic.length > 0) {
         const lastSlab = telescopic[telescopic.length - 1];
@@ -22,42 +20,53 @@ class SolarExportCalculator {
       }
 
       if (units <= threshold) {
-        // CASE A: Telescopic (Progressive)
+        // CASE A: Telescopic (Progressive calculation in buckets)
         let remaining = units;
         for (const slab of telescopic) {
           if (remaining <= 0) break;
+          
           const slabStart = Number(slab.from || 0);
           const slabEnd = (slab.to === null) ? Infinity : Number(slab.to);
-          const slabUnits = Math.min(remaining, (slabEnd - slabStart + 1));
+
+          // ✅ REAL FIX: Calculate accurate capacity without bounds overflow
+          const slabCapacity = slabEnd === Infinity 
+            ? remaining 
+            : (slabEnd - slabStart); 
+
+          const slabUnits = Math.min(remaining, slabCapacity);
           
           cost += slabUnits * Number(slab.rate);
           remaining -= slabUnits;
         }
       } else {
-        // CASE B: Non-Telescopic (Flat rate on ALL units if above threshold)
-        let flatRate = 9.20; // Fallback
-        for (const slab of nonTelescopic) {
+        // CASE B: Non-Telescopic (Flat rate for TOTAL units)
+        let flatRate = 9.20; // Default fallback to highest rate
+        
+        const matchedSlab = nonTelescopic.find(slab => {
           const from = Number(slab.from || 0);
           const to = (slab.to === null) ? Infinity : Number(slab.to);
-          if (units >= from && units <= to) {
-            flatRate = Number(slab.rate);
-            break;
-          }
+          return units >= from && units <= to;
+        });
+
+        if (matchedSlab) {
+          flatRate = Number(matchedSlab.rate);
         }
+        
         cost = units * flatRate;
       }
     } 
-    // --- TAMIL NADU / PROGRESSIVE LOGIC ---
+    // --- TAMIL NADU / PROGRESSIVE LOGIC (UNTOUCHED PERFECT) ---
     else {
       let remaining = units;
-      // Ensure slabs are sorted by the 'from' range
-      const sortedSlabs = [...slabs].sort((a, b) => a.from - b.from);
+      const slabsArray = Array.isArray(slabs) ? slabs : [];
+      const sortedSlabs = [...slabsArray].sort((a, b) => a.from - b.from);
 
       for (const slab of sortedSlabs) {
         if (remaining <= 0) break;
         const slabStart = Number(slab.from || 0);
         const slabEnd = (slab.to === null) ? Infinity : Number(slab.to);
-        const slabUnits = Math.min(remaining, (slabEnd - slabStart + 1));
+        const slabCapacity = (slabEnd - slabStart + 1);
+        const slabUnits = Math.min(remaining, slabCapacity);
 
         if (slabUnits > 0) {
           cost += slabUnits * Number(slab.rate);
@@ -66,7 +75,7 @@ class SolarExportCalculator {
       }
     }
 
-    // Add fixed charges if they exist in the template
+    // Add fixed charges (Using the structure from your seed function)
     const fixedCharge = tariffTemplate.fixedCharges?.single_phase?.up_to_250 || 0; 
     cost += Number(fixedCharge);
 

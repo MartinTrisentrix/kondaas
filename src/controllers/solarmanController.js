@@ -50,10 +50,41 @@ export const getSolarmanToken = async (c) => {
 
 export const getSolarmanStations = async (c) => {
   try {
-    const { token } = await c.req.json();
-    if (!token) return c.json({ error: "Access token is required!" }, 400);
+    // 🛡️ Get the token sent by the mobile from the request header
+    const incomingToken = c.req.header('x-auth-token');
+    
+    // Parameters from the request body
+    const { token, phoneNo } = await c.req.json();
+
+    if (!phoneNo) {
+      return c.json({ error: "phoneNo is required in the request body" }, 400);
+    }
+
+    if (!incomingToken) {
+      return c.json({ error: "Unauthorized: No security token provided" }, 401);
+    }
+
+    if (!token) {
+      return c.json({ error: "Access token is required!" }, 400);
+    }
 
     return await withDatabase(MONGODB_URI, async (db) => {
+      // Fetch the full user document without projections
+      const user = await db.collection("userDetails").findOne({ _id: phoneNo });
+
+      if (!user) {
+        return c.json({ error: "User profile not found" }, 404);
+      }
+
+      // 🛡️ SECURITY CHECK: Compare the header token with the stored authToken
+      const storedToken = user.UserInfo?.authToken;
+
+      if (!storedToken || storedToken !== incomingToken) {
+        console.error(`❌ Security Alert: Token mismatch for ${phoneNo}`);
+        return c.json({ error: "Unauthorized: Invalid security token" }, 401);
+      }
+
+      // --- TOKEN VERIFIED: Proceed to Solarman API ---
       const { appId } = await getKeys(db);
 
       const response = await fetch(
@@ -86,9 +117,41 @@ export const getSolarmanStations = async (c) => {
 
 export const getSolarmanDevices = async (c) => {
   try {
-    const { token, stationId } = await c.req.json();
+    // 🛡️ Get the token sent by the mobile from the request header
+    const incomingToken = c.req.header('x-auth-token');
+    
+    // Parameters from the request body
+    const { token, stationId, phoneNo } = await c.req.json();
+
+    if (!phoneNo) {
+      return c.json({ error: "phoneNo is required in the request body" }, 400);
+    }
+
+    if (!incomingToken) {
+      return c.json({ error: "Unauthorized: No security token provided" }, 401);
+    }
+
+    if (!stationId) {
+      return c.json({ error: "Station ID is required" }, 400);
+    }
 
     return await withDatabase(MONGODB_URI, async (db) => {
+      // Fetch the full user document without projections
+      const user = await db.collection("userDetails").findOne({ _id: phoneNo });
+
+      if (!user) {
+        return c.json({ error: "User profile not found" }, 404);
+      }
+
+      // 🛡️ SECURITY CHECK: Compare the header token with the stored authToken
+      const storedToken = user.UserInfo?.authToken;
+
+      if (!storedToken || storedToken !== incomingToken) {
+        console.error(`❌ Security Alert: Token mismatch for ${phoneNo}`);
+        return c.json({ error: "Unauthorized: Invalid security token" }, 401);
+      }
+
+      // --- TOKEN VERIFIED: Proceed to Solarman API ---
       const { appId } = await getKeys(db);
 
       const response = await fetch(
@@ -158,28 +221,77 @@ export const getSolarmanRealTimeData = async (c) => {
 
 export const getSolarmanHistory = async (c) => {
   try {
-    // timeType: 1(Day/Frame), 2(Month/Days), 3(Year/Months), 4(Lifetime/Years)
-    const { token, stationId, timeType, startTime, endTime } = await c.req.json();
+    // 🛡️ SECURITY FEATURE: Firebase token from mobile app header
+    const incomingSecurityToken = c.req.header('x-auth-token');
+    
+    // Extract phoneNo from request JSON body parameters
+    const { token, stationId, timeType, startTime, endTime, phoneNo } = await c.req.json();
+
+    if (!incomingSecurityToken) {
+      return c.json({ error: "Unauthorized: No security token provided" }, 401);
+    }
+
+    if (!phoneNo) {
+      return c.json({ error: "phoneNo is required in the request body" }, 400);
+    }
 
     if (!token || !stationId || !timeType) {
       return c.json({ error: "Token, Station ID, and TimeType are required!" }, 400);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
+      // 🛡️ SECURITY LOOKUP: Find user by primary identifier (_id) and confirm device link match
+      const user = await db.collection("userDetails").findOne({ 
+        _id: phoneNo,
+        "devicelist.id": Number(stationId)
+      });
+
+      // Secure verification comparison 
+      if (!user || user.UserInfo?.authToken !== incomingSecurityToken) {
+        console.error(`❌ Security Alert: Token mismatch or unauthorized station access for user: ${phoneNo}, station: ${stationId}`);
+        return c.json({ error: "Unauthorized: Invalid security token" }, 401);
+      }
+
+      // 🕒 LAYER 2 CHECK: Cache Logic for non-day timeTypes (Week=2, Month=3, Year=4 depending on your Solarman setup)
+      // Assuming timeType 1 means Day history. Adjust if your code handles day metrics differently.
+      const isDayRequest = Number(timeType) === 1; 
+      const cacheKey = `history_${timeType}_${startTime}_${endTime}`;
+
+      if (!isDayRequest) {
+        const cache = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
+
+        if (cache && cache.historyCache?.[cacheKey]) {
+          const storedChart = cache.historyCache[cacheKey];
+          const lastCachedTime = new Date(storedChart.lastCalculatedAt);
+          const currentTime = new Date();
+          
+          const hoursPassed = (currentTime - lastCachedTime) / (1000 * 60 * 60);
+
+          // If this chart data was fetched less than 24 hours ago, return it immediately!
+          if (hoursPassed < 24) {
+            console.log(`⚡ [History Cache Hit] Returning stored ${cacheKey} from DB`);
+            return c.json({
+              success: true,
+              fromCache: true,
+              data: storedChart.data
+            });
+          }
+        }
+      } else {
+        console.log(`☀️ [Live Day Request] Bypassing cache to ensure real-time tracker execution for station: ${stationId}`);
+      }
+
+      // 💥 LAYER 3: FETCH FRESH DATA
+      console.log(`🔄 Fetching fresh metrics from Solarman API for key: ${cacheKey}`);
       const { appId } = await getKeys(db);
 
-      // Solarman expects specific formats:
-      // timeType 1 & 2: YYYY-MM-DD
-      // timeType 3: YYYY-MM
-      // timeType 4: YYYY
-      
       const response = await fetch(
         `${SOLARMAN_BASE_URL}/station/v1.0/history?appId=${appId}&language=en`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `bearer ${token}`
+            "Authorization": `bearer ${token}` // Solarman Token
           },
           body: JSON.stringify({ 
             stationId, 
@@ -200,25 +312,43 @@ export const getSolarmanHistory = async (c) => {
         }, 400);
       }
 
+      const rawItems = data.stationDataItems || [];
+
+      // 💾 SAVE TO DB CACHE ONLY IF IT IS NOT A DAY REQUEST
+      if (!isDayRequest) {
+        const chartDataToCache = {
+          data: rawItems,
+          lastCalculatedAt: new Date().toISOString()
+        };
+
+        await db.collection("solarSavingsCache").updateOne(
+          { _id: String(stationId) },
+          { 
+            $set: { 
+              [`historyCache.${cacheKey}`]: chartDataToCache 
+            } 
+          },
+          { upsert: true }
+        );
+      }
+
       return c.json({
         success: true,
-        // stationDataItems contains the list of values for your charts
-        data: data.stationDataItems || [] 
+        fromCache: false,
+        data: rawItems
       });
     });
   } catch (err) {
     return c.json({ error: err.message }, 500);
   }
 };
-
-
 //user details  alternate for firebase storage are
-
 
 export const saveUserDetails = async (c) => {
   try {
     const data = await c.req.json();
     const mobile = data.UserInfo?.phoneNo;
+    
     if (!mobile) return c.json({ error: "Mobile number is required" }, 400);
 
     return await withDatabase(MONGODB_URI, async (db) => {
@@ -235,56 +365,96 @@ export const saveUserDetails = async (c) => {
         if (ui.email)         setFields["UserInfo.email"]    = ui.email;
         if (ui.password)      setFields["UserInfo.password"] = ui.password;
         if (ui.name)          setFields["UserInfo.name"]     = ui.name;
+        if (ui.fcmToken)      setFields["UserInfo.fcmToken"] = ui.fcmToken;
+        if (ui.authToken)     setFields["UserInfo.authToken"] = ui.authToken;
       }
 
-      // 🚀 AUTO-DETECTION: Use SolarParser instead of trusting user input
-      if (data.devicelist && data.devicelist[0]) {
-        const rawStation = data.devicelist[0];
-        const parsed = SolarParser.parse(rawStation);
+      // 💥 MULTI-STATION FIX: Loop through and parse all stations in the list
+      if (data.devicelist && data.devicelist.length > 0) {
+        // Use the first station in the list to detect and set the default user state
+        const firstParsed = SolarParser.parse(data.devicelist[0]);
+        if (firstParsed.state) setFields["UserInfo.state"] = firstParsed.state;
         
-        if (parsed.state) setFields["UserInfo.state"] = parsed.state;
-        
-        setFields.devicelist = [{
-          ...rawStation,
-          operationalTimestamp: parsed.operationalTimestamp,
-          stationId: parsed.stationId,
-          capacityKw: parsed.capacityKw
-        }];
+        // Map through all items so every station gets processed and saved
+        setFields.devicelist = data.devicelist.map((rawStation) => {
+          const parsed = SolarParser.parse(rawStation);
+          return {
+            ...rawStation,
+            operationalTimestamp: parsed.operationalTimestamp,
+            stationId: parsed.stationId,
+            capacityKw: parsed.capacityKw
+          };
+        });
       }
 
+      // Update the document. If it's a new day/new token, it overwrites the old one.
       await db.collection("userDetails").updateOne(
         { _id: mobile },
-        { $set: setFields }, 
+        { $set: { ...setFields } }, 
         { upsert: true }
       );
 
-      return c.json({ success: true, message: "Profile saved via SolarParser" });
+      return c.json({ 
+        success: true, 
+        message: "Profile and Security Token saved successfully with all stations" 
+      });
     });
   } catch (err) {
     return c.json({ error: err.message }, 500);
   }
 };
 
+
+
+
+
 export const getUser = async (c) => {
   try {
     const { phoneNo } = await c.req.json();
+    
+    // 🛡️ Get the token sent by the mobile from the request header
+    const incomingToken = c.req.header('x-auth-token');
 
     if (!phoneNo) {
       return c.json({ error: "phoneNo is required in the request body" }, 400);
     }
 
+    if (!incomingToken) {
+      return c.json({ error: "Unauthorized: No security token provided" }, 401);
+    }
+
     return await withDatabase(MONGODB_URI, async (db) => {
-      const user = await db.collection("userDetails").findOne({ _id: phoneNo });
+      // 1. We fetch the user but only the fields we need (Projection)
+      const user = await db.collection("userDetails").findOne(
+        { _id: phoneNo },
+        { 
+          projection: { 
+            "UserInfo.email": 1, 
+            "UserInfo.password": 1, 
+            "UserInfo.authToken": 1 
+          } 
+        }
+      );
 
       if (!user) {
         return c.json({ error: "User profile not found" }, 404);
       }
 
-      // We return the whole document so the app can access UserInfo.state, 
-      // UserInfo.email, and the devicelist for the dashboard.
+      // 🛡️ SECURITY CHECK: Still need the authToken for validation
+      const storedToken = user.UserInfo?.authToken;
+
+      if (!storedToken || storedToken !== incomingToken) {
+        console.error(`❌ Security Alert: Token mismatch for ${phoneNo}`);
+        return c.json({ error: "Unauthorized: Invalid security token" }, 401);
+      }
+
+      // ✅ SUCCESS: Send back ONLY email and password
       return c.json({
         success: true,
-        data: user
+        data: {
+          email: user.UserInfo.email,
+          password: user.UserInfo.password
+        }
       });
     });
   } catch (err) {
@@ -299,14 +469,9 @@ export const seedTariffSlabs = async (c) => {
     return await withDatabase(MONGODB_URI, async (db) => {
       const collection = db.collection("solarExportSlabs");
 
-      // 1. TAMIL NADU DATA
       const tamilNaduData = {
         state: "Tamil Nadu",
         category: "solar_export_credit",
-        description: "Monthly surplus solar export credit slabs",
-        displayName: "Tamil Nadu",
-        effectiveFrom: new Date("2020-01-01T00:00:00Z"),
-        effectiveTo: null,
         type: "progressive",
         slabs: [
           { from: 1, to: 100, rate: 0 },
@@ -318,22 +483,16 @@ export const seedTariffSlabs = async (c) => {
           { from: 801, to: 1000, rate: 10.5 },
           { from: 1001, to: null, rate: 11.55 }
         ],
-        updatedAt: new Date("2026-01-01T14:00:00Z")
+        updatedAt: new Date()
       };
 
-      // 2. KERALA DATA (More complex structure)
       const keralaData = {
         state: "kerala",
         category: "domestic_consumption",
-        description: "KSEB LT-I Domestic tariff slabs (monthly basis) - KSERC order 2025-2027",
-        displayName: "Kerala (KSEB) - Domestic LT",
-        effectiveFrom: "2025-04-01",
-        effectiveTo: "2027-03-31",
         type: "telescopic + non-telescopic",
         fixedCharges: {
-          notes: "Fixed charges in ₹/consumer/month, vary by connected load and phase.",
-          single_phase: { up_to_250: 160, above_250: 200 },
-          three_phase: { up_to_250: 240, above_250: 310 }
+          // SET TO 0: This prevents the ₹160 from being added every month in the loop
+          single_phase: { up_to_250: 0 } 
         },
         slabs: {
           telescopic_up_to_250: [
@@ -351,16 +510,13 @@ export const seedTariffSlabs = async (c) => {
             { from: 501, to: null, rate: 9.2 }
           ]
         },
-        source: "KSERC tariff order 2025-2027 (effective April 2025)",
-        updatedAt: new Date("2026-02-16T18:30:00Z"),
-        updatedBy: "admin-ezhil"
+        updatedAt: new Date()
       };
 
-      // Execute Upserts
       await collection.updateOne({ _id: "tamil-nadu" }, { $set: tamilNaduData }, { upsert: true });
       await collection.updateOne({ _id: "kerala" }, { $set: keralaData }, { upsert: true });
 
-      return c.json({ success: true, message: "Tariff slabs updated successfully" });
+      return c.json({ success: true, message: "Tariff slabs updated successfully with 0 fixed charges" });
     });
   } catch (err) {
     return c.json({ error: err.message }, 500);

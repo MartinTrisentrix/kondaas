@@ -89,9 +89,9 @@ export const addOrder = async (c) => {
       const { todayDateOnly, todayKey } = getISTDateStrings();
 
       // 1. New Flowtrix Config from your KT
-      const boardId = "2FswXA8aPgN77czTc";
-      const newEntryListId = "MdzfSFNPpJK2kJwtE";
-      const flowtrixToken = "RbVRbci-5iBEZ8NtaWpDagU8FiwQwdDD6nOEqCcmBbw";
+      const boardId = "SJdfRnCr7DdBpJZ6s";
+      const newEntryListId = "X97mPsTtdgzCupAiG";
+      const flowtrixToken = "hTDnleH7ZhpcRutIf5eor19xjn6OToGF6Ss2X7groaT";
       
       let flowtrixCardId = null;
 
@@ -107,7 +107,7 @@ export const addOrder = async (c) => {
             title: `${name} - ${mobile}`,
             description: `New Entry\n Phone: ${mobile}\n Name: ${name}`,
             authorId: "Lxc9EwKM5j4ov95ZT",
-            swimlaneId: "ce7E2A4yMHQ4dnyC5"
+            swimlaneId: "pomXibpEQxQYji8pS"
           })
         });
 
@@ -136,7 +136,7 @@ export const addOrder = async (c) => {
         kilovolt: kilovolt || null,
         status: "unaccepted",
         flowtrixCardId: flowtrixCardId,
-        currentListId: "MdzfSFNPpJK2kJwtE", 
+        currentListId: "X97mPsTtdgzCupAiG", 
         createdAt: todayDateOnly,
       });
 
@@ -196,10 +196,10 @@ export const syncToFlowtrix = async (c) => {
     const { customerMobile, surveyorNumber, status } = await c.req.json();
 
     const listIdMap = {
-      "accepted": "mtcXAPeWbNmFYfTAX",
-      "inprogress": "BNynXwMhgJfGpmWfX",
-      "completed": "A4p7fzj8975NAmjny",
-      "rejected": "FARBgod3N6na4iFok"
+      "accepted": "HcaGuqYyuLcSxGokt",
+      "inprogress": "AXApNwXWvJLejTTAW",
+      "completed": "8K5rFTuQNpsS5Esdk",
+      "rejected": "AkgGgQaobFNgR2Ymq"
     };
 
     const targetListId = listIdMap[status.toLowerCase()];
@@ -220,11 +220,11 @@ export const syncToFlowtrix = async (c) => {
         return c.json({ error: "Lead not found in database." }, 404);
       }
 
-      const currentOriginId = lead.currentListId || "MdzfSFNPpJK2kJwtE";
+      const currentOriginId = lead.currentListId || "X97mPsTtdgzCupAiG";
       console.log(`📡 Moving from: ${currentOriginId} -> To: ${targetListId}`);
 
-      const boardId = "2FswXA8aPgN77czTc";
-      const flowtrixToken = "RbVRbci-5iBEZ8NtaWpDagU8FiwQwdDD6nOEqCcmBbw";
+      const boardId = "SJdfRnCr7DdBpJZ6s";
+      const flowtrixToken = "hTDnleH7ZhpcRutIf5eor19xjn6OToGF6Ss2X7groaT";
 
       // 2. Flowtrix API Call
       const response = await fetch(`http://flowtrix:8080/api/boards/${boardId}/lists/${currentOriginId}/cards/${lead.flowtrixCardId}`, {
@@ -235,7 +235,7 @@ export const syncToFlowtrix = async (c) => {
         },
         body: JSON.stringify({
           listId: targetListId, 
-          description: `${status.toUpperCase()}\n Surveyor: ${surveyorNumber}`
+          description: `${status.toUpperCase()} Surveyor: ${surveyorNumber}`
         })
       });
 

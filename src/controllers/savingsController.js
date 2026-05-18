@@ -7,29 +7,81 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 export const calculateUserSavings = async (c) => {
   try {
-    const { phoneNo } = await c.req.json();
+    const { phoneNo, stationId: selectedStationId } = await c.req.json(); 
+    const incomingToken = c.req.header('x-auth-token');
+
     if (!phoneNo) return c.json({ error: "Phone number is required" }, 400);
+    if (!incomingToken) {
+      return c.json({ error: "Unauthorized: No security token provided" }, 401);
+    }
 
     return await withDatabase(MONGODB_URI, async (db) => {
       // 1. Get User Data
       const user = await db.collection("userDetails").findOne({ _id: phoneNo });
-      if (!user || !user.UserInfo?.email || !user.UserInfo?.password) {
+      if (!user) return c.json({ error: "User profile not found" }, 404);
+
+      // 🛡️ SECURITY MATCH CHECK
+      const storedToken = user.UserInfo?.authToken;
+      if (!storedToken || storedToken !== incomingToken) {
+        console.error(`❌ Security Alert: Token mismatch for ${phoneNo}`);
+        return c.json({ error: "Unauthorized: Invalid security token" }, 401);
+      }
+
+      if (!user.UserInfo?.email || !user.UserInfo?.password) {
         return c.json({ error: "Solarman credentials missing" }, 404);
       }
 
-      const device = user.devicelist?.[0];
-      const stationId = device?.id;
-      if (!stationId) return c.json({ error: "No solar station linked" }, 404);
+      // CHOOSE THE CORRECT STATION DYNAMICALLY
+      let targetDevice = null;
+      if (selectedStationId) {
+        targetDevice = user.devicelist?.find(d => String(d.id) === String(selectedStationId));
+      }
+      if (!targetDevice) {
+        targetDevice = user.devicelist?.[0];
+      }
 
-      // 2. Get Token
+      const stationId = targetDevice?.id;
+      if (!stationId) return c.json({ error: "No solar station linked or found match" }, 404);
+
+      // 🕒 LAYER 2 CHECK: Look inside separate cache collection
+      const cache = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
+      
+      if (cache && cache.lastCalculatedAt) {
+        const lastCachedTime = new Date(cache.lastCalculatedAt);
+        const currentTime = new Date();
+        
+        // Calculate the difference in hours
+        const hoursPassed = (currentTime - lastCachedTime) / (1000 * 60 * 60);
+
+        // If it was calculated less than 24 hours ago, return it immediately!
+        if (hoursPassed < 24) {
+          console.log(`⚡ [Separate Cache Hit] Returning stored DB savings for station ${stationId}`);
+          return c.json({
+            success: true,
+            fromCache: true,
+            data: {
+              stationId: Number(stationId),
+              state: cache.state,
+              cumulativeUnits: cache.cumulativeUnits,
+              cumulativeCost: cache.cumulativeCost,
+              monthlyRecords: cache.monthlyRecords
+            }
+          });
+        }
+      }
+
+      // 💥 LAYER 3: CACHE MISS -> DO THE HEAVY WORK
+      console.log(`🔄 [Cache Miss/Expired] Fetching fresh calculations from Solarman for station ${stationId}`);
+
+      // 2. Get Token for Solarman
       const token = await getInternalSolarmanToken(
         db,
         user.UserInfo.email,
-        user.UserInfo.password, // ✅ plain password use பண்ணு
+        user.UserInfo.password, 
         getSystemKeys
       );
 
-      // 3. State Detection — fetchStationInfo வழியா
+      // 3. State Detection
       const rawStationData = await fetchStationInfo(stationId, token, db, getSystemKeys);
       const parsed = SolarParser.parse(rawStationData);
       if (!parsed?.state) {
@@ -38,13 +90,12 @@ export const calculateUserSavings = async (c) => {
 
       // 4. Load Tariff
       const stateId = parsed.state.toLowerCase().replace(/\s+/g, '-');
-      const tariffTemplate = await db.collection("solarExportSlabs")
-        .findOne({ _id: stateId });
+      const tariffTemplate = await db.collection("solarExportSlabs").findOne({ _id: stateId });
       if (!tariffTemplate) {
         return c.json({ error: `Tariff not found for: ${stateId}` }, 404);
       }
 
-      // 5. Sync state to DB
+      // 5. Sync state to DB if changed
       if (user.UserInfo.state !== parsed.state) {
         await db.collection("userDetails").updateOne(
           { _id: phoneNo },
@@ -52,14 +103,13 @@ export const calculateUserSavings = async (c) => {
         );
       }
 
-      // 6. operationalTimestamp — DB-ல இல்லன்னா Solarman-லயே எடு
-      const startTs = device?.operationalTimestamp
-        || rawStationData?.startOperatingTime  // ✅ fetchStationInfo response-லயே இருக்கு
-        || device?.createdDate;
+      const startTs = targetDevice?.operationalTimestamp
+        || rawStationData?.startOperatingTime  
+        || targetDevice?.createdDate;
 
       if (!startTs) return c.json({ error: "No operational date found" }, 404);
 
-      // 7. Historical Calculation Loop
+      // 6. Historical Calculation Loop
       const startDate = new Date(startTs * 1000);
       const now = new Date();
       const monthlyRecords = {};
@@ -97,14 +147,35 @@ export const calculateUserSavings = async (c) => {
         cursor.setMonth(cursor.getMonth() + 1);
       }
 
+      // 💾 SAFE SAVE TO SEPARATE COLLECTION
+      const savingsResult = {
+        state: parsed.state,
+        cumulativeUnits: Number(cumulativeUnits.toFixed(2)),
+        cumulativeCost: Number(cumulativeCost.toFixed(2)),
+        monthlyRecords,
+        lastCalculatedAt: new Date().toISOString()
+      };
+
+      await db.collection("solarSavingsCache").updateOne(
+        { _id: String(stationId) },
+        { 
+          $set: {
+            state: savingsResult.state,
+            cumulativeUnits: savingsResult.cumulativeUnits,
+            cumulativeCost: savingsResult.cumulativeCost,
+            monthlyRecords: savingsResult.monthlyRecords,
+            lastCalculatedAt: savingsResult.lastCalculatedAt
+          } 
+        },
+        { upsert: true }
+      );
+
       return c.json({
         success: true,
+        fromCache: false,
         data: {
-          stationId,
-          state: parsed.state,
-          cumulativeUnits: Number(cumulativeUnits.toFixed(2)),
-          cumulativeCost: Number(cumulativeCost.toFixed(2)),
-          monthlyRecords
+          stationId: Number(stationId),
+          ...savingsResult
         }
       });
     });
