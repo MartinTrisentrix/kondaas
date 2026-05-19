@@ -9,7 +9,7 @@ const MONGODB_URI = process.env.MONGODB_URI;
  */
 const getKeys = async (db) => {
   const keys = await getSystemKeys(db);
-  return keys.solarman;
+  return keys.solarman;  
 };
 
 export const getSolarmanToken = async (c) => {
@@ -332,9 +332,14 @@ export const getSolarmanHistory = async (c) => {
 
       const rawItems = data.stationDataItems || [];
 
-      // 🚨 REAL FIX: If it is a live day request, return it NOW. Do not let it hit the code below!
-      if (isDayRequest) {
-        console.log(`✅ [Live Day Success] Successfully returning un-cached data to device.`);
+      
+    if (isDayRequest) {
+        // Look at the LAST item in the array to see the most recent reading, not midnight!
+        const lastIndex = rawItems.length > 0 ? rawItems.length - 1 : 0;
+        const liveUnits = rawItems[lastIndex]?.generationValue ?? 0;
+        
+        console.log(`☀️ [LIVE CURRENT DAY UNITS - LATEST]: ${liveUnits}`);
+
         return c.json({
           success: true,
           fromCache: false,
@@ -370,7 +375,6 @@ export const getSolarmanHistory = async (c) => {
   }
 };
 //user details  alternate for firebase storage are
-
 export const saveUserDetails = async (c) => {
   try {
     const data = await c.req.json();
@@ -458,8 +462,6 @@ export const saveUserDetails = async (c) => {
   }
 };
 
-
-
 export const getUser = async (c) => {
   try {
     // ✅ Extract deviceId alongside phoneNo from request JSON body parameters
@@ -524,7 +526,6 @@ export const getUser = async (c) => {
     return c.json({ error: err.message }, 500);
   }
 };
-
 
 export const seedTariffSlabs = async (c) => {
   try {
