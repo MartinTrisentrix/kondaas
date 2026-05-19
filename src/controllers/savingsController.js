@@ -7,10 +7,15 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 export const calculateUserSavings = async (c) => {
   try {
-    const { phoneNo, stationId: selectedStationId } = await c.req.json(); 
+    // ✅ Extract deviceId from request body along with phoneNo and station ID selection
+    const { phoneNo, stationId: selectedStationId, deviceId } = await c.req.json(); 
     const incomingToken = c.req.header('x-auth-token');
 
     if (!phoneNo) return c.json({ error: "Phone number is required" }, 400);
+    
+    // 🚨 NEW MANDATORY CHECK: Ensure deviceId is present to pinpoint session context
+    if (!deviceId) return c.json({ error: "deviceId is required in the request body" }, 400);
+
     if (!incomingToken) {
       return c.json({ error: "Unauthorized: No security token provided" }, 401);
     }
@@ -20,10 +25,13 @@ export const calculateUserSavings = async (c) => {
       const user = await db.collection("userDetails").findOne({ _id: phoneNo });
       if (!user) return c.json({ error: "User profile not found" }, 404);
 
-      // 🛡️ SECURITY MATCH CHECK
-      const storedToken = user.UserInfo?.authToken;
+      // 🛡️ NEW MULTI-DEVICE SECURITY CHECK: Scan active device tracking array list
+      const devicesList = user.PlatformInfo?.devices || [];
+      const currentDeviceSession = devicesList.find(d => d.deviceId === deviceId);
+      const storedToken = currentDeviceSession?.authToken;
+
       if (!storedToken || storedToken !== incomingToken) {
-        console.error(`❌ Security Alert: Token mismatch for ${phoneNo}`);
+        console.error(`❌ Security Alert: Token mismatch or unregistered hardware configuration for ${phoneNo} on device ${deviceId}`);
         return c.json({ error: "Unauthorized: Invalid security token" }, 401);
       }
 

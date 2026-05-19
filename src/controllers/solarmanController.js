@@ -53,11 +53,16 @@ export const getSolarmanStations = async (c) => {
     // 🛡️ Get the token sent by the mobile from the request header
     const incomingToken = c.req.header('x-auth-token');
     
-    // Parameters from the request body
-    const { token, phoneNo } = await c.req.json();
+    // ✅ Extract deviceId alongside token and phoneNo from the request body
+    const { token, phoneNo, deviceId } = await c.req.json();
 
     if (!phoneNo) {
       return c.json({ error: "phoneNo is required in the request body" }, 400);
+    }
+
+    // 🚨 NEW MANDATORY CHECK: Ensure deviceId is provided to map token validation context
+    if (!deviceId) {
+      return c.json({ error: "deviceId is required in the request body" }, 400);
     }
 
     if (!incomingToken) {
@@ -69,18 +74,20 @@ export const getSolarmanStations = async (c) => {
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // Fetch the full user document without projections
+      // Fetch the full user document to cross-examine device lists and tokens
       const user = await db.collection("userDetails").findOne({ _id: phoneNo });
 
       if (!user) {
         return c.json({ error: "User profile not found" }, 404);
       }
 
-      // 🛡️ SECURITY CHECK: Compare the header token with the stored authToken
-      const storedToken = user.UserInfo?.authToken;
+      // 🛡️ NEW MULTI-DEVICE SECURITY CHECK: Locate target device session inside the devices list array
+      const devicesList = user.PlatformInfo?.devices || [];
+      const currentDeviceSession = devicesList.find(d => d.deviceId === deviceId);
+      const storedToken = currentDeviceSession?.authToken;
 
       if (!storedToken || storedToken !== incomingToken) {
-        console.error(`❌ Security Alert: Token mismatch for ${phoneNo}`);
+        console.error(`❌ Security Alert: Token mismatch or unregistered device layout for ${phoneNo} on device ${deviceId}`);
         return c.json({ error: "Unauthorized: Invalid security token" }, 401);
       }
 
@@ -224,8 +231,8 @@ export const getSolarmanHistory = async (c) => {
     // 🛡️ SECURITY FEATURE: Firebase token from mobile app header
     const incomingSecurityToken = c.req.header('x-auth-token');
     
-    // Extract phoneNo from request JSON body parameters
-    const { token, stationId, timeType, startTime, endTime, phoneNo } = await c.req.json();
+    // Extract deviceId from request JSON body parameters alongside others
+    const { token, stationId, timeType, startTime, endTime, phoneNo, deviceId } = await c.req.json();
 
     if (!incomingSecurityToken) {
       return c.json({ error: "Unauthorized: No security token provided" }, 401);
@@ -235,25 +242,36 @@ export const getSolarmanHistory = async (c) => {
       return c.json({ error: "phoneNo is required in the request body" }, 400);
     }
 
+    if (!deviceId) {
+      return c.json({ error: "deviceId is required in the request body" }, 400);
+    }
+
     if (!token || !stationId || !timeType) {
       return c.json({ error: "Token, Station ID, and TimeType are required!" }, 400);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // 🛡️ SECURITY LOOKUP: Find user by primary identifier (_id) and confirm device link match
+      // 🛡️ SECURITY LOOKUP: Find user by phone and verify station ownership array link
       const user = await db.collection("userDetails").findOne({ 
         _id: phoneNo,
         "devicelist.id": Number(stationId)
       });
 
-      // Secure verification comparison 
-      if (!user || user.UserInfo?.authToken !== incomingSecurityToken) {
-        console.error(`❌ Security Alert: Token mismatch or unauthorized station access for user: ${phoneNo}, station: ${stationId}`);
+      if (!user) {
+        return c.json({ error: "Unauthorized: Invalid profile or unlinked station" }, 401);
+      }
+
+      // 🛡️ MULTI-DEVICE SECURITY CHECK: Scan array for matching hardware session string
+      const devicesList = user.PlatformInfo?.devices || [];
+      const currentDeviceSession = devicesList.find(d => d.deviceId === deviceId);
+      const storedToken = currentDeviceSession?.authToken;
+
+      if (!storedToken || storedToken !== incomingSecurityToken) {
+        console.error(`❌ Security Alert: Token mismatch or unregistered hardware configuration for user: ${phoneNo}, device: ${deviceId}`);
         return c.json({ error: "Unauthorized: Invalid security token" }, 401);
       }
 
-      // 🕒 LAYER 2 CHECK: Cache Logic for non-day timeTypes (Week=2, Month=3, Year=4 depending on your Solarman setup)
-      // Assuming timeType 1 means Day history. Adjust if your code handles day metrics differently.
+      // 🕒 LAYER 2 CHECK: Cache Logic for non-day timeTypes (Week, Month, Year)
       const isDayRequest = Number(timeType) === 1; 
       const cacheKey = `history_${timeType}_${startTime}_${endTime}`;
 
@@ -278,10 +296,10 @@ export const getSolarmanHistory = async (c) => {
           }
         }
       } else {
-        console.log(`☀️ [Live Day Request] Bypassing cache to ensure real-time tracker execution for station: ${stationId}`);
+        console.log(`☀️ [Live Day Request] Bypassing cache checks completely for station: ${stationId}`);
       }
 
-      // 💥 LAYER 3: FETCH FRESH DATA
+      // 💥 LAYER 3: FETCH FRESH DATA FROM EXTERNAL API
       console.log(`🔄 Fetching fresh metrics from Solarman API for key: ${cacheKey}`);
       const { appId } = await getKeys(db);
 
@@ -314,23 +332,32 @@ export const getSolarmanHistory = async (c) => {
 
       const rawItems = data.stationDataItems || [];
 
-      // 💾 SAVE TO DB CACHE ONLY IF IT IS NOT A DAY REQUEST
-      if (!isDayRequest) {
-        const chartDataToCache = {
-          data: rawItems,
-          lastCalculatedAt: new Date().toISOString()
-        };
-
-        await db.collection("solarSavingsCache").updateOne(
-          { _id: String(stationId) },
-          { 
-            $set: { 
-              [`historyCache.${cacheKey}`]: chartDataToCache 
-            } 
-          },
-          { upsert: true }
-        );
+      // 🚨 REAL FIX: If it is a live day request, return it NOW. Do not let it hit the code below!
+      if (isDayRequest) {
+        console.log(`✅ [Live Day Success] Successfully returning un-cached data to device.`);
+        return c.json({
+          success: true,
+          fromCache: false,
+          data: rawItems
+        });
       }
+
+      // 💾 SAVE TO DB CACHE (Strictly executed ONLY for Week, Month, and Year charts)
+      console.log(`💾 Caching heavy historical chart data for key: ${cacheKey}`);
+      const chartDataToCache = {
+        data: rawItems,
+        lastCalculatedAt: new Date().toISOString()
+      };
+
+      await db.collection("solarSavingsCache").updateOne(
+        { _id: String(stationId) },
+        { 
+          $set: { 
+            [`historyCache.${cacheKey}`]: chartDataToCache 
+          } 
+        },
+        { upsert: true }
+      );
 
       return c.json({
         success: true,
@@ -349,33 +376,60 @@ export const saveUserDetails = async (c) => {
     const data = await c.req.json();
     const mobile = data.UserInfo?.phoneNo;
     
+    // 🚨 Extract device specifications from the new PlatformInfo block
+    const incomingDevice = data.PlatformInfo?.devices?.[0] || data.PlatformInfo?.device;
+    const deviceId = incomingDevice?.deviceId;
+
     if (!mobile) return c.json({ error: "Mobile number is required" }, 400);
+    if (!deviceId) return c.json({ error: "Device ID is required for session tracking" }, 400);
 
     return await withDatabase(MONGODB_URI, async (db) => {
+      // Fetch the existing profile to prevent blowing away other active device sessions
+      const existingUser = await db.collection("userDetails").findOne({ _id: mobile });
+      
+      // Initialize or pull existing devices array
+      let currentDevicesList = existingUser?.PlatformInfo?.devices || [];
+
+      // Clean out any old session tracking for THIS specific hardware ID
+      currentDevicesList = currentDevicesList.filter(d => d.deviceId !== deviceId);
+
+      // Construct the pristine new session block to be pushed
+      const newDeviceSession = {
+        deviceId: deviceId,
+        os: incomingDevice.os || "Unknown",
+        version: incomingDevice.version || "Unknown",
+        authToken: incomingDevice.authToken || data.UserInfo?.authToken,
+        fcmToken: incomingDevice.fcmToken || data.UserInfo?.fcmToken,
+        lastUsedAt: new Date().toISOString()
+      };
+
+      // Append the clean session object to our tracking array
+      currentDevicesList.push(newDeviceSession);
+
       const setFields = {};
 
-      // Map basic info
+      // Map basic app metrics
       if (data.AppInfo) setFields.AppInfo = data.AppInfo;
-      if (data.PlatformInfo) setFields.PlatformInfo = data.PlatformInfo;
+      setFields["PlatformInfo.devices"] = currentDevicesList;
       setFields.updatedAt = new Date();
 
+      // Map core identity profile with the new role field fallback
       if (data.UserInfo) {
         const ui = data.UserInfo;
-        if (ui.phoneNo)       setFields["UserInfo.phoneNo"]  = ui.phoneNo;
-        if (ui.email)         setFields["UserInfo.email"]    = ui.email;
-        if (ui.password)      setFields["UserInfo.password"] = ui.password;
-        if (ui.name)          setFields["UserInfo.name"]     = ui.name;
-        if (ui.fcmToken)      setFields["UserInfo.fcmToken"] = ui.fcmToken;
-        if (ui.authToken)     setFields["UserInfo.authToken"] = ui.authToken;
+        if (ui.phoneNo)  setFields["UserInfo.phoneNo"]  = ui.phoneNo;
+        if (ui.email)    setFields["UserInfo.email"]    = ui.email;
+        if (ui.password) setFields["UserInfo.password"] = ui.password;
+        if (ui.name)     setFields["UserInfo.name"]     = ui.name;
+        
+        // Setup role configuration block. Retain existing role if it exists, otherwise set to default 'user'
+        setFields["UserInfo.role"] = existingUser?.UserInfo?.role || ui.role || "user";
       }
 
-      // 💥 MULTI-STATION FIX: Loop through and parse all stations in the list
+      // Handle multi-station generation parser array (Untouched from yesterday)
       if (data.devicelist && data.devicelist.length > 0) {
-        // Use the first station in the list to detect and set the default user state
         const firstParsed = SolarParser.parse(data.devicelist[0]);
         if (firstParsed.state) setFields["UserInfo.state"] = firstParsed.state;
         
-        // Map through all items so every station gets processed and saved
         setFields.devicelist = data.devicelist.map((rawStation) => {
           const parsed = SolarParser.parse(rawStation);
           return {
@@ -387,16 +441,16 @@ export const saveUserDetails = async (c) => {
         });
       }
 
-      // Update the document. If it's a new day/new token, it overwrites the old one.
+      // Commit changes surgically to MongoDB
       await db.collection("userDetails").updateOne(
         { _id: mobile },
-        { $set: { ...setFields } }, 
+        { $set: setFields }, 
         { upsert: true }
       );
 
       return c.json({ 
         success: true, 
-        message: "Profile and Security Token saved successfully with all stations" 
+        message: "Profile settings and active device session synced successfully" 
       });
     });
   } catch (err) {
@@ -406,11 +460,10 @@ export const saveUserDetails = async (c) => {
 
 
 
-
-
 export const getUser = async (c) => {
   try {
-    const { phoneNo } = await c.req.json();
+    // ✅ Extract deviceId alongside phoneNo from request JSON body parameters
+    const { phoneNo, deviceId } = await c.req.json();
     
     // 🛡️ Get the token sent by the mobile from the request header
     const incomingToken = c.req.header('x-auth-token');
@@ -419,19 +472,25 @@ export const getUser = async (c) => {
       return c.json({ error: "phoneNo is required in the request body" }, 400);
     }
 
+    // 🚨 NEW MANDATORY CHECK: Ensure deviceId is provided to track multi-device context
+    if (!deviceId) {
+      return c.json({ error: "deviceId is required in the request body" }, 400);
+    }
+
     if (!incomingToken) {
       return c.json({ error: "Unauthorized: No security token provided" }, 401);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // 1. We fetch the user but only the fields we need (Projection)
+      // 1. We fetch the user with targeted fields including role and our array of sessions
       const user = await db.collection("userDetails").findOne(
         { _id: phoneNo },
         { 
           projection: { 
             "UserInfo.email": 1, 
             "UserInfo.password": 1, 
-            "UserInfo.authToken": 1 
+            "UserInfo.role": 1,          // ✅ Projection updated to fetch role
+            "PlatformInfo.devices": 1    // ✅ Projection updated to fetch active device list array
           } 
         }
       );
@@ -440,20 +499,23 @@ export const getUser = async (c) => {
         return c.json({ error: "User profile not found" }, 404);
       }
 
-      // 🛡️ SECURITY CHECK: Still need the authToken for validation
-      const storedToken = user.UserInfo?.authToken;
+      // 🛡️ NEW MULTI-DEVICE SECURITY CHECK: Drill into array to find matching deviceId
+      const devicesList = user.PlatformInfo?.devices || [];
+      const currentDeviceSession = devicesList.find(d => d.deviceId === deviceId);
+      const storedToken = currentDeviceSession?.authToken;
 
       if (!storedToken || storedToken !== incomingToken) {
-        console.error(`❌ Security Alert: Token mismatch for ${phoneNo}`);
+        console.error(`❌ Security Alert: Token mismatch or unregistered device configuration for ${phoneNo} on device ${deviceId}`);
         return c.json({ error: "Unauthorized: Invalid security token" }, 401);
       }
 
-      // ✅ SUCCESS: Send back ONLY email and password
+      // ✅ SUCCESS: Send back email, password, and the newly added role field fallback
       return c.json({
         success: true,
         data: {
-          email: user.UserInfo.email,
-          password: user.UserInfo.password
+          email: user.UserInfo?.email,
+          password: user.UserInfo?.password,
+          role: user.UserInfo?.role || "user" // Fallback default to 'user' safely if missing
         }
       });
     });
