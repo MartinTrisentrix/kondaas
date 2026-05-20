@@ -7,17 +7,22 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 export const calculateUserSavings = async (c) => {
   try {
-    // ✅ Extract deviceId from request body along with phoneNo and station ID selection
-    const { phoneNo, stationId: selectedStationId, deviceId } = await c.req.json(); 
+    
     const incomingToken = c.req.header('x-auth-token');
+    const headerDeviceId = c.req.header('x-device-id'); 
+
+
+    const { phoneNo, stationId: selectedStationId } = await c.req.json(); 
 
     if (!phoneNo) return c.json({ error: "Phone number is required" }, 400);
     
-    // 🚨 NEW MANDATORY CHECK: Ensure deviceId is present to pinpoint session context
-    if (!deviceId) return c.json({ error: "deviceId is required in the request body" }, 400);
-
     if (!incomingToken) {
       return c.json({ error: "Unauthorized: No security token provided" }, 401);
+    }
+
+    
+    if (!headerDeviceId) {
+      return c.json({ error: "Unauthorized: No deviceId provided in headers" }, 401);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
@@ -25,13 +30,13 @@ export const calculateUserSavings = async (c) => {
       const user = await db.collection("userDetails").findOne({ _id: phoneNo });
       if (!user) return c.json({ error: "User profile not found" }, 404);
 
-      // 🛡️ NEW MULTI-DEVICE SECURITY CHECK: Scan active device tracking array list
+      
       const devicesList = user.PlatformInfo?.devices || [];
-      const currentDeviceSession = devicesList.find(d => d.deviceId === deviceId);
+      const currentDeviceSession = devicesList.find(d => d.deviceId === headerDeviceId);
       const storedToken = currentDeviceSession?.authToken;
 
       if (!storedToken || storedToken !== incomingToken) {
-        console.error(`❌ Security Alert: Token mismatch or unregistered hardware configuration for ${phoneNo} on device ${deviceId}`);
+        console.error(`❌ Security Alert: Token mismatch or unregistered hardware configuration for ${phoneNo} on device ${headerDeviceId}`);
         return c.json({ error: "Unauthorized: Invalid security token" }, 401);
       }
 
@@ -39,7 +44,7 @@ export const calculateUserSavings = async (c) => {
         return c.json({ error: "Solarman credentials missing" }, 404);
       }
 
-      // CHOOSE THE CORRECT STATION DYNAMICALLY
+      
       let targetDevice = null;
       if (selectedStationId) {
         targetDevice = user.devicelist?.find(d => String(d.id) === String(selectedStationId));
@@ -142,7 +147,9 @@ export const calculateUserSavings = async (c) => {
         });
 
         const units = Number(solarResponse?.stationDataItems?.[0]?.generationValue || 0);
-        const cost = SolarExportCalculator.calculateMonthlyCredit(units, tariffTemplate);
+        
+        // ⚡ PERFECT TIMELINE SYNC: Passing monthKey down to let the calculator choose the matching billingRule
+        const cost = SolarExportCalculator.calculateMonthlyCredit(units, tariffTemplate, monthKey);
 
         monthlyRecords[monthKey] = {
           units: Number(units.toFixed(2)),

@@ -1,14 +1,39 @@
 class SolarExportCalculator {
-  static calculateMonthlyCredit(units, tariffTemplate) {
+  static calculateMonthlyCredit(units, tariffTemplate, monthKey) {
     if (!units || units <= 0) return 0;
     if (!tariffTemplate) return 0;
 
     const state = (tariffTemplate._id || 'tamil-nadu').toLowerCase();
-    const slabs = tariffTemplate.slabs;
     let cost = 0;
+    let selectedSlabs = null;
+
+    // --- NEW DATE-BASED AND CONDITIONAL PROGRESSIVE LOGIC (TAMIL NADU) ---
+    if (tariffTemplate.type === "date_based_progressive" && Array.isArray(tariffTemplate.billingRules)) {
+      
+      // Find the rule matching the timeline era and condition layout
+      const matchedRule = tariffTemplate.billingRules.find(rule => {
+        // Check timeline bound rules
+        if (rule.effectiveTo && monthKey > rule.effectiveTo) return false;
+        if (rule.effectiveFrom && monthKey < rule.effectiveFrom) return false;
+
+        // Check conditional max/min units rules
+        if (rule.condition) {
+          if (rule.condition.maxUnits && units > rule.condition.maxUnits) return false;
+          if (rule.condition.minUnits && units < rule.condition.minUnits) return false;
+        }
+
+        return true;
+      });
+
+      if (matchedRule) {
+        selectedSlabs = matchedRule.slabs;
+        console.log(`🎯 [Tariff Engine]: Matched rule tier type "${matchedRule.type}" for ${state} in ${monthKey} with ${units} units.`);
+      }
+    }
 
     // --- KERALA LOGIC ---
     if (state === 'kerala') {
+      const slabs = tariffTemplate.slabs;
       const telescopic = slabs?.telescopic_up_to_250 || [];
       const nonTelescopic = slabs?.non_telescopic_above_250 || [];
 
@@ -28,7 +53,6 @@ class SolarExportCalculator {
           const slabStart = Number(slab.from || 0);
           const slabEnd = (slab.to === null) ? Infinity : Number(slab.to);
 
-          // ✅ REAL FIX: Calculate accurate capacity without bounds overflow
           const slabCapacity = slabEnd === Infinity 
             ? remaining 
             : (slabEnd - slabStart); 
@@ -55,11 +79,12 @@ class SolarExportCalculator {
         cost = units * flatRate;
       }
     } 
-    // --- TAMIL NADU / PROGRESSIVE LOGIC (UNTOUCHED PERFECT) ---
+    // --- STANDARD / FALLBACK PROGRESSIVE LOGIC ---
     else {
-      let remaining = units;
-      const slabsArray = Array.isArray(slabs) ? slabs : [];
+      // Use matched slabs from billingRules if found; otherwise fall back to old baseline root slabs array
+      const slabsArray = selectedSlabs || tariffTemplate.slabs || [];
       const sortedSlabs = [...slabsArray].sort((a, b) => a.from - b.from);
+      let remaining = units;
 
       for (const slab of sortedSlabs) {
         if (remaining <= 0) break;
