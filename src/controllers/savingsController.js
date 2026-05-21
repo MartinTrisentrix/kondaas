@@ -1,18 +1,24 @@
 import { withDatabase, getSystemKeys } from '../utils/config.js';
 import SolarExportCalculator from '../utils/SolarExportCalculator.js';
 import { SolarParser } from '../utils/SolarParser.js'; 
-import { fetchSolarmanHistory,getInternalSolarmanToken, fetchStationInfo } from '../utils/solarmanApi.js';
+import { fetchSolarmanHistory, getInternalSolarmanToken, fetchStationInfo } from '../utils/solarmanApi.js';
 
 const MONGODB_URI = process.env.MONGODB_URI;
+const SOLARMAN_BASE_URL = "https://globalapi.solarmanpv.com";
 
 export const calculateUserSavings = async (c) => {
   try {
-    
+    // 🛡️ SECURITY HEADERS: Extracted cleanly from transit layers
     const incomingToken = c.req.header('x-auth-token');
     const headerDeviceId = c.req.header('x-device-id'); 
 
-
-    const { phoneNo, stationId: selectedStationId } = await c.req.json(); 
+    // Clean payload parameter data block
+    const data = await c.req.json();
+    const phoneNo = data.phoneNo;
+    const selectedStationId = data.stationId;
+    
+    // 🔄 HYBRID TRACKER: Fallback chain checks body payload so stationId arrays never drop!
+    const deviceId = headerDeviceId || data.deviceId;
 
     if (!phoneNo) return c.json({ error: "Phone number is required" }, 400);
     
@@ -20,23 +26,22 @@ export const calculateUserSavings = async (c) => {
       return c.json({ error: "Unauthorized: No security token provided" }, 401);
     }
 
-    
-    if (!headerDeviceId) {
-      return c.json({ error: "Unauthorized: No deviceId provided in headers" }, 401);
+    if (!deviceId) {
+      return c.json({ error: "Unauthorized: No deviceId provided in headers or body" }, 401);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // 1. Get User Data
+      // 1. Get User Data Profile
       const user = await db.collection("userDetails").findOne({ _id: phoneNo });
       if (!user) return c.json({ error: "User profile not found" }, 404);
 
-      
+      // Verify active hardware credentials match current transit token context
       const devicesList = user.PlatformInfo?.devices || [];
-      const currentDeviceSession = devicesList.find(d => d.deviceId === headerDeviceId);
+      const currentDeviceSession = devicesList.find(d => d.deviceId === deviceId);
       const storedToken = currentDeviceSession?.authToken;
 
       if (!storedToken || storedToken !== incomingToken) {
-        console.error(`❌ Security Alert: Token mismatch or unregistered hardware configuration for ${phoneNo} on device ${headerDeviceId}`);
+        console.error(`❌ Security Alert: Token mismatch or unregistered hardware configuration for ${phoneNo} on device ${deviceId}`);
         return c.json({ error: "Unauthorized: Invalid security token" }, 401);
       }
 
@@ -44,19 +49,19 @@ export const calculateUserSavings = async (c) => {
         return c.json({ error: "Solarman credentials missing" }, 404);
       }
 
-      
+      // CHOOSE THE CORRECT STATION DYNAMICALLY
       let targetDevice = null;
       if (selectedStationId) {
         targetDevice = user.devicelist?.find(d => String(d.id) === String(selectedStationId));
       }
       if (!targetDevice) {
-        targetDevice = user.devicelist?.[0];
+        targetDevice = user.devicelist?.find(d => d.isLastLoggedIn === true) || user.devicelist?.[0];
       }
 
       const stationId = targetDevice?.id;
       if (!stationId) return c.json({ error: "No solar station linked or found match" }, 404);
 
-      // 🕒 LAYER 2 CHECK: Look inside separate cache collection
+      // 🕒 LAYER 2 CHECK: Separate Cache Storage Collection
       const cache = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
       
       if (cache && cache.lastCalculatedAt) {
@@ -83,10 +88,10 @@ export const calculateUserSavings = async (c) => {
         }
       }
 
-      // 💥 LAYER 3: CACHE MISS -> DO THE HEAVY WORK
+      // 💥 LAYER 3: CACHE MISS -> FETCH FRESH DATA FROM SOLARMAN
       console.log(`🔄 [Cache Miss/Expired] Fetching fresh calculations from Solarman for station ${stationId}`);
 
-      // 2. Get Token for Solarman
+      // 2. Obtain Token for Solarman
       const token = await getInternalSolarmanToken(
         db,
         user.UserInfo.email,
@@ -94,21 +99,22 @@ export const calculateUserSavings = async (c) => {
         getSystemKeys
       );
 
-      // 3. State Detection
+      // 3. Extract Real-Time Station Info & Run through Parser
       const rawStationData = await fetchStationInfo(stationId, token, db, getSystemKeys);
       const parsed = SolarParser.parse(rawStationData);
+      
       if (!parsed?.state) {
         return c.json({ error: "Could not detect state" }, 404);
       }
 
-      // 4. Load Tariff
+      // 4. Load Tariff Rules Document Template
       const stateId = parsed.state.toLowerCase().replace(/\s+/g, '-');
       const tariffTemplate = await db.collection("solarExportSlabs").findOne({ _id: stateId });
       if (!tariffTemplate) {
         return c.json({ error: `Tariff not found for: ${stateId}` }, 404);
       }
 
-      // 5. Sync state to DB if changed
+      // 5. Sync state to DB if context changes dynamically
       if (user.UserInfo.state !== parsed.state) {
         await db.collection("userDetails").updateOne(
           { _id: phoneNo },
@@ -116,21 +122,24 @@ export const calculateUserSavings = async (c) => {
         );
       }
 
+      // Map operational starting date constraints
       const startTs = targetDevice?.operationalTimestamp
         || rawStationData?.startOperatingTime  
         || targetDevice?.createdDate;
 
       if (!startTs) return c.json({ error: "No operational date found" }, 404);
 
-      // 6. Historical Calculation Loop
+      // 6. Historical Monthly Calculation Loop
       const startDate = new Date(startTs * 1000);
       const now = new Date();
       const monthlyRecords = {};
       let cumulativeUnits = 0;
       let cumulativeCost = 0;
 
+      // Align execution target directly to day 1 of installation milestone month
       let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
 
+      // 📅 Chronological month iteration tracking bounds ensures current month is evaluated
       while (cursor <= now) {
         const year = cursor.getFullYear();
         const month = String(cursor.getMonth() + 1).padStart(2, '0');
@@ -146,26 +155,65 @@ export const calculateUserSavings = async (c) => {
           getKeys: getSystemKeys
         });
 
-        const units = Number(solarResponse?.stationDataItems?.[0]?.generationValue || 0);
+        // Capture raw production metrics directly from the source endpoint response
+        const rawUnits = Number(solarResponse?.stationDataItems?.[0]?.generationValue || 0);
         
-        // ⚡ PERFECT TIMELINE SYNC: Passing monthKey down to let the calculator choose the matching billingRule
-        const cost = SolarExportCalculator.calculateMonthlyCredit(units, tariffTemplate, monthKey);
+        // 🛡️ SECURITY LOCK: Safe-store pristine value right into the aggregator before passing to calculator reference spaces
+        cumulativeUnits += rawUnits;
+
+        // Execute billing progressive math calculation safely
+        const cost = SolarExportCalculator.calculateMonthlyCredit(rawUnits, tariffTemplate, monthKey);
 
         monthlyRecords[monthKey] = {
-          units: Number(units.toFixed(2)),
+          units: Number(rawUnits.toFixed(2)), // Keep view data fully pristine for mobile UI
           cost: Number(cost.toFixed(2))
         };
 
-        cumulativeUnits += units;
         cumulativeCost += cost;
 
+        // Move to the next calendar month increment
         cursor.setMonth(cursor.getMonth() + 1);
       }
 
-      // 💾 SAFE SAVE TO SEPARATE COLLECTION
+      // 🚀 MATCHING FRONTEND SNAP: Fetching true total generation from the exact realTime endpoint
+      let trueApiLifetimeUnits = 0;
+      try {
+        const systemKeys = await getSystemKeys(db);
+        const appId = systemKeys.solarman?.appId;
+
+        // Call the exact path verified by the working frontend snippet: station/v1.0/realTime
+        const realTimeResponse = await fetch(
+          `${SOLARMAN_BASE_URL}/station/v1.0/realTime?appId=${appId}&language=en`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `bearer ${token}`
+            },
+            body: JSON.stringify({ stationId: Number(stationId) }) // Uses stationId directly
+          }
+        );
+
+        const realTimeJson = await realTimeResponse.json();
+
+        // Map generationTotal directly off the response object payload root properties
+        if (realTimeJson && realTimeJson.generationTotal !== undefined) {
+          trueApiLifetimeUnits = Number(realTimeJson.generationTotal);
+          console.log(`🎯Captured direct hardware odometer total: ${trueApiLifetimeUnits}`);
+        }
+      } catch (failsafeErr) {
+        console.error("⚠️ Failsafe realTime station fetch skipped:", failsafeErr.message);
+      }
+
+      // Ensure cache uses the real-time odometer hardware value if it exceeds loop calculations
+      const finalCumulativeUnits = (trueApiLifetimeUnits > cumulativeUnits) 
+        ? trueApiLifetimeUnits 
+        : cumulativeUnits;
+
+      // 💾 SAVE STRUCTURAL RECORD CONTEXT BACK TO THE CACHE COLLECTION
       const savingsResult = {
         state: parsed.state,
-        cumulativeUnits: Number(cumulativeUnits.toFixed(2)),
+        cumulativeUnits: Number(finalCumulativeUnits.toFixed(2)),
         cumulativeCost: Number(cumulativeCost.toFixed(2)),
         monthlyRecords,
         lastCalculatedAt: new Date().toISOString()
