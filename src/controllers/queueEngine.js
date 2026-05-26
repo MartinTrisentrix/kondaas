@@ -135,7 +135,6 @@ const handleCascadingDispatchJob = async (db, job) => {
     const workerProfile = await db.collection("userDetails").findOne({ _id: targetSurveyor.phoneNo });
     
     let tokenSent = false;
-    // 🔑 ALIGNED: Applied the exact safe device fallback validation to eliminate surveyor leaks
     if (workerProfile && workerProfile.PlatformInfo && Array.isArray(workerProfile.PlatformInfo.devices)) {
       const devices = workerProfile.PlatformInfo.devices;
       const activeDevice = devices.find(d => d.isLastLoggedIn === true && d.fcmToken);
@@ -187,48 +186,11 @@ const handleCascadingDispatchJob = async (db, job) => {
   }
 };
 
-const sendWeeklySummaryNotification = async (deviceToken, totalUnits, summaryBody) => {
-  try {
-    if (!deviceToken) return false;
-
-    const statusTitle = "☀️ Your Weekly Solar Report is Ready!";
-
-    const response = await admin.messaging().send({
-      token: deviceToken.trim(),
-      notification: {
-        title: statusTitle,
-        body: summaryBody,
-      },
-      android: {
-        priority: "high",
-        notification: {
-          sound: "kondaas",
-          channelId: "custom_sound_channel_v2",
-          clickAction: "WEEKLY_SUMMARY_NOTIFICATION_ACTION",
-        }
-      },
-      data: {
-        type: "weekly_summary",
-        title: statusTitle,
-        body: summaryBody,
-        totalUnits: String(totalUnits),
-        show_actions: "false"
-      }
-    });
-
-    console.log("🚀 FCM Server Accepted Summary Message ID:", response);
-    return true;
-  } catch (err) {
-    // 🔑 CHANGED HERE: Log the entire error structure to uncover hidden messages
-    console.error("❌ Firebase Admin SDK Summary Exception Details:", JSON.stringify(err, null, 2) || err);
-    return false;
-  }
-};
-
 const processAllCustomersWeeklyJobs = async (db, masterJob) => {
   try {
-    const users = await db.collection("userDetails").find({ "devicelist.0": { $exists: true } }).toArray();
-    console.log(`📋 Found ${users.length} users in local userDetails collection.`);
+    // 🔍 Pull users with registered devices
+    const users = await db.collection("userDetails").find({ "PlatformInfo.devices.0": { $exists: true } }).toArray();
+    console.log(`📋 Found ${users.length} users with registered devices in local userDetails collection.`);
 
     const today = new Date();
     const currentDay = today.getDay();
@@ -246,22 +208,24 @@ const processAllCustomersWeeklyJobs = async (db, masterJob) => {
       const phoneNo = user._id;
       const stations = user.devicelist || [];
       
-      // 📱 STEP 1: SAFE DEVICE IDENTIFICATION & FILTERING
-      let fcmToken = null;
+      // 📱 EXTRACT ALL TOKENS (No longer filtering down to just lastLogin!)
+      let tokensToBroadcast = [];
       if (user.PlatformInfo && Array.isArray(user.PlatformInfo.devices)) {
-        const devices = user.PlatformInfo.devices;
-        const activeDevice = devices.find(d => d.isLastLoggedIn === true && d.fcmToken);
-        const fallbackDevice = !activeDevice ? devices.find(d => d.fcmToken) : null;
-        
-        const targetDevice = activeDevice || fallbackDevice;
-        fcmToken = targetDevice ? targetDevice.fcmToken : null;
+        tokensToBroadcast = user.PlatformInfo.devices
+          .map(d => d.fcmToken)
+          .filter(token => token && token.trim().length > 0);
+      }
+
+      if (tokensToBroadcast.length === 0) {
+        console.log(`ℹ️ User ${phoneNo} skipped: No active tokens inside device array.`);
+        continue;
       }
 
       let totalUserWeeklyUnits = 0;
       let processedStationsCount = 0;
       let stationBreakdownText = ""; 
 
-      console.log(`👤 Processing user ${phoneNo} with ${stations.length} connected station(s)...`);
+      console.log(`👤 Processing user ${phoneNo} across ${stations.length} connected station(s)...`);
 
       for (const station of stations) {
         const stationId = station.id;
@@ -290,21 +254,75 @@ const processAllCustomersWeeklyJobs = async (db, masterJob) => {
         }
       }
 
-      // 🚀 STEP 2: TRANSMIT WEEKLY REPORT VIA MOBILE PUSH ONLY
+      // 🚀 TRANSMIT TO ALL REGISTERED TOKENS VIA SEND-EACH MULTICAST PACKET
       if (processedStationsCount > 0) {
         totalUserWeeklyUnits = Number(totalUserWeeklyUnits.toFixed(2));
+        const statusTitle = "☀️ Your Weekly Solar Report is Ready!";
         const finalNotificationBody = `Your weekly summary breakdown:\n${stationBreakdownText}Total Generation: ${totalUserWeeklyUnits} Units`;
         
-        if (fcmToken && fcmToken.trim().length > 0) {
-          console.log(`⚡ Sending FCM push notification to user ${phoneNo}...`);
-          await sendWeeklySummaryNotification(fcmToken.trim(), totalUserWeeklyUnits, finalNotificationBody);
-        } else {
-          console.log(`ℹ️ User ${phoneNo} skipped: No active device found with a valid FCM token.`);
+        // Map every token into an explicit individual message configuration payload
+        const messagesPayload = tokensToBroadcast.map(token => ({
+          token: token.trim(),
+          notification: {
+            title: statusTitle,
+            body: finalNotificationBody,
+          },
+          android: {
+            priority: "high",
+            notification: {
+              sound: "kondaas",
+              channelId: "custom_sound_channel_v2",
+              clickAction: "WEEKLY_SUMMARY_NOTIFICATION_ACTION",
+            }
+          },
+          data: {
+            type: "weekly_summary",
+            title: statusTitle,
+            body: finalNotificationBody,
+            totalUnits: String(totalUserWeeklyUnits),
+            show_actions: "false"
+          }
+        }));
+
+        console.log(`⚡ Dispatching batch messages to all (${tokensToBroadcast.length}) registered devices for user ${phoneNo}...`);
+        
+        try {
+          const batchResponse = await admin.messaging().sendEach(messagesPayload);
+          console.log(`📋 Multicast results for ${phoneNo}: [${batchResponse.successCount} passed / ${batchResponse.failureCount} failed]`);
+          
+          // 🧼 SELF-CLEANING RECOVERY MECHANISM
+          for (let index = 0; index < batchResponse.responses.length; index++) {
+            const singleResponse = batchResponse.responses[index];
+            
+            if (!singleResponse.success) {
+              const errorInstance = singleResponse.error;
+              const targetBadToken = tokensToBroadcast[index];
+
+              console.warn(`⚠️ Target Token Delivery Failure Context:`, errorInstance.code);
+
+              // Catch uninstalled app or expired tokens specifically
+              if (errorInstance.code === 'messaging/registration-token-not-registered') {
+                console.log(`🧼 Stale/Uninstalled device detected. Surgically plucking token from MongoDB...`);
+                
+                await db.collection("userDetails").updateOne(
+                  { _id: phoneNo },
+                  { 
+                    $pull: { 
+                      "PlatformInfo.devices": { fcmToken: targetBadToken } 
+                    } 
+                  }
+                );
+                console.log(`✅ Successfully scrubbed invalid token for user ${phoneNo} from MongoDB.`);
+              }
+            }
+          }
+        } catch (multicastErr) {
+          console.error(`❌ Complete breakdown executing multi-device send operation:`, multicastErr.message);
         }
       }
     }
 
-    // ⏱️ STEP 3: TEMPORARY TESTING CLOCK - SET TO 30 SECONDS
+    // ⏱️ TESTING CYCLE TIMER: Keep it looping every 30 seconds for your device validation tests
     const nextRunTime = new Date();
     nextRunTime.setSeconds(nextRunTime.getSeconds() + 30); 
 

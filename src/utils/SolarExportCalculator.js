@@ -34,7 +34,7 @@ class SolarExportCalculator {
 
       if (matchedRule) {
         selectedSlabs = matchedRule.slabs;
-        console.log(`🎯 [Tariff Engine Success]: Found matching rule array style "${matchedRule.type}" for ${monthKey}`);
+        
       } else {
         console.log(`⚠️ [Tariff Engine Alert]: No matching rule found for month ${monthKey} with ${units} units`);
       }
@@ -96,10 +96,6 @@ class SolarExportCalculator {
           const slabRate = Number(slab.rate || 0);
           cost += slabUnits * slabRate;
           remaining -= slabUnits;
-          
-          if (monthKey === "2026-05") {
-            console.log(`   ├─► Slab [${slabStart} to ${slab.to || '∞'}]: Processed ${slabUnits.toFixed(2)} units @ ₹${slabRate} = +₹${(slabUnits * slabRate).toFixed(2)}`);
-          }
         }
       }
     }
