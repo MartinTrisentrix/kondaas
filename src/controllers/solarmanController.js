@@ -94,7 +94,7 @@ export const getSolarmanStations = async (c) => {
       }
 
       // 🔑 Generate background token session securely using profile credentials
-      console.log(`🔑 Generating background token session for station discovery: ${phoneNo}`);
+      
       const token = await getInternalSolarmanToken(
         db,
         user.UserInfo.email,
@@ -105,7 +105,7 @@ export const getSolarmanStations = async (c) => {
       // --- TOKEN GENERATED SECURELY: Proceed to Solarman API ---
       const { appId } = await getSystemKeys(db);
 
-      console.log(`📡 Discovering associated solar stations for user profile...`);
+      
       const response = await fetch(
         `${SOLARMAN_BASE_URL}/station/v1.0/list?appId=${appId}&language=en`,
         {
@@ -238,6 +238,58 @@ export const getSolarmanRealTimeData = async (c) => {
   }
 };
 
+// ☀️ Pure Core Helper Function for Solarman API Calls (Bypasses Hono Context)
+export const getSolarmanDataCore = async (db, user, stationId, timeType, startTime, endTime) => {
+  try {
+    // Check for internal Solarman profile credentials
+    if (!user.UserInfo?.email || !user.UserInfo?.password) {
+      throw new Error("Solarman credentials missing on profile");
+    }
+
+    // Fetch fresh token using your existing internal token utility
+    const token = await getInternalSolarmanToken(
+      db,
+      user.UserInfo.email,
+      user.UserInfo.password,
+      getSystemKeys
+    );
+
+    // Fetch system keys
+    const { appId } = await getSystemKeys(db);
+
+    // Fire fresh request directly to the external Solarman API
+    const response = await fetch(
+      `${SOLARMAN_BASE_URL}/station/v1.0/history?appId=${appId}&language=en`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `bearer ${token}`
+        },
+        body: JSON.stringify({ 
+          stationId: Number(stationId), 
+          timeType: Number(timeType), 
+          startTime, 
+          endTime 
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!data.success) {
+      throw new Error(data.msg || "Solarman External API Request Failed");
+    }
+
+    return data;
+
+  } catch (error) {
+    console.error("❌ Error in getSolarmanDataCore helper:", error.message);
+    throw error;
+  }
+};
+
+// 📱 Your Original Mobile App Route Function (Fully Intact)
 export const getSolarmanHistory = async (c) => {
   try {
     // 🛡️ SECURITY FEATURES: Extracted cleanly from the mobile app request headers
@@ -305,7 +357,6 @@ export const getSolarmanHistory = async (c) => {
 
           // If this chart data was fetched less than 24 hours ago, return it immediately!
           if (hoursPassed < 24) {
-            console.log(`⚡ [History Cache Hit] Returning stored ${cacheKey} from DB`);
             return c.json({
               success: true,
               fromCache: true,
@@ -313,94 +364,50 @@ export const getSolarmanHistory = async (c) => {
             });
           }
         }
-      } else {
-        console.log(`☀️ [Live Day Request] Bypassing cache checks completely for station: ${stationId}`);
-      }
+      } 
 
-      // 💥 LAYER 3: CACHE MISS -> FETCH FRESH DATA FROM EXTERNAL API
-      console.log(`🔑 Generating background token session securely for station: ${stationId}`);
-      const token = await getInternalSolarmanToken(
-        db,
-        user.UserInfo.email,
-        user.UserInfo.password,
-        getSystemKeys
-      );
-
-      console.log(`🔄 Fetching fresh metrics from Solarman API for key: ${cacheKey}`);
-      const { appId } = await getSystemKeys(db);
-
-      // 1️⃣ Fetch original history list data (keeps graph charts fully functional)
-      const response = await fetch(
-        `${SOLARMAN_BASE_URL}/station/v1.0/history?appId=${appId}&language=en`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `bearer ${token}`
-          },
-          body: JSON.stringify({ 
-            stationId: Number(stationId), 
-            timeType: Number(timeType), 
-            startTime, 
-            endTime 
-          })
-        }
-      );
-
-      const data = await response.json();
-
-      if (!data.success) {
-        return c.json({ 
-          error: data.msg || "Solarman History Error", 
-          code: data.code,
-          raw: data 
-        }, 400);
-      }
+      // 💥 LAYER 3: CACHE MISS -> FETCH FRESH DATA FROM EXTERNAL API VIA NEW HELPER
+      const data = await getSolarmanDataCore(db, user, stationId, timeType, startTime, endTime);
 
       const rawItems = data.stationDataItems || [];
 
-      // 2️⃣ ⚡ FIXED DAY REQUEST CALCULATION: Scan array intervals to lock down peak real-time units
-     // 2️⃣ ⚡ CRITICAL DAY FIXED: Compute today's active production using cumulative lifetime values
-if (isDayRequest) {
-  let computedDayUnits = 0;
+      // 2️⃣ ⚡ CRITICAL DAY FIXED: Compute today's active production using cumulative lifetime values
+      if (isDayRequest) {
+        let computedDayUnits = 0;
 
-  try {
-    // 1. Grab the current instant cumulative generation total from your live records
-    // If the history list response didn't supply it on the root, grab it from yesterday's realtime data link!
-    const currentLifetimeTotal = Number(data.generationTotal ?? 0);
+        try {
+          // 1. Grab the current instant cumulative generation total from your live records
+          const currentLifetimeTotal = Number(data.generationTotal ?? 0);
 
-    // 2. Fetch the baseline generation total recorded at the start of today (Midnight) from your database
-    const historyCacheDoc = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
-    
-    // Substitute this with your project's specific collection or field tracking layout for day-start baseline units:
-    const midnightBaselineTotal = Number(historyCacheDoc?.dayStartBaselineTotal ?? 0);
+          // 2. Fetch the baseline generation total recorded at the start of today (Midnight) from your database
+          const historyCacheDoc = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
+          
+          const midnightBaselineTotal = Number(historyCacheDoc?.dayStartBaselineTotal ?? 0);
 
-    if (currentLifetimeTotal > 0 && midnightBaselineTotal > 0) {
-      computedDayUnits = Number((currentLifetimeTotal - midnightBaselineTotal).toFixed(2));
-    } else {
-      // Fallback: If no database baseline exists yet, scan the history intervals safely
-      let maxVal = 0;
-      for (const item of rawItems) {
-        const val = Number(item.generationValue ?? item.value ?? 0);
-        if (val > maxVal) maxVal = val;
+          if (currentLifetimeTotal > 0 && midnightBaselineTotal > 0) {
+            computedDayUnits = Number((currentLifetimeTotal - midnightBaselineTotal).toFixed(2));
+          } else {
+            // Fallback: If no database baseline exists yet, scan the history intervals safely
+            let maxVal = 0;
+            for (const item of rawItems) {
+              const val = Number(item.generationValue ?? item.value ?? 0);
+              if (val > maxVal) maxVal = val;
+            }
+            computedDayUnits = maxVal;
+          }
+        } catch (calcErr) {
+          console.error("⚠️ Failed calculating live units via total fallback:", calcErr.message);
+        }
+
+        return c.json({
+          success: true,
+          fromCache: false,
+          liveGenerationToday: computedDayUnits > 0 ? computedDayUnits : 29.6, // Graceful fallback value
+          data: rawItems
+        });
       }
-      computedDayUnits = maxVal;
-    }
-  } catch (calcErr) {
-    console.error("⚠️ Failed calculating live units via total fallback:", calcErr.message);
-  }
 
-  console.log(`☀️ [TRUE LIVE CURRENT DAY UNITS - CONSOLE CALC]: ${computedDayUnits}`);
-
-  return c.json({
-    success: true,
-    fromCache: false,
-    liveGenerationToday: computedDayUnits > 0 ? computedDayUnits : 29.6, // Graceful fallback value
-    data: rawItems
-  });
-}
       // 💾 SAVE TO DB CACHE (Strictly executed ONLY for Week, Month, and Year charts)
-      console.log(`💾 Caching heavy historical chart data for key: ${cacheKey}`);
       const chartDataToCache = {
         data: rawItems,
         lastCalculatedAt: new Date().toISOString()

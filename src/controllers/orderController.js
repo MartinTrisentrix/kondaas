@@ -1,13 +1,9 @@
 import { withDatabase, getSystemKeys } from '../utils/config.js';
-import { GoogleAuth } from 'google-auth-library';
 
 const MONGODB_URI = process.env.MONGODB_URI;
 
-
-
-
 function haversineDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371;
+  const R = 6371; // Radius of the earth in km
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a =
@@ -26,71 +22,6 @@ const getISTDateStrings = () => {
   return { todayDateOnly, todayKey };
 };
 
-// 1. Updated FCM function to include kilovolt in the message
-const sendFCMNotification = async (deviceToken, customerData, leadId, kilovolt, address) => {
-  try {
-    if (!deviceToken) return false;
-
-    // 🤖 AUTOMATION MAGIC: This automatically reads aws-wif.json via your environment variable
-    const auth = new GoogleAuth({
-      scopes: ['https://www.googleapis.com/auth/firebase.messaging']
-    });
-    const client = await auth.getClient();
-    const tokenResponse = await client.getAccessToken();
-    const accessToken = tokenResponse.token;
-
-    if (!accessToken) {
-      console.error("❌ Failed to automatically generate GCP access token.");
-      return false;
-    }
-
-    const kvInfo = kilovolt ? ` [${kilovolt}]` : "";
-    const addrInfo = address ? ` at ${address}` : "";
-    const statusBody = `Customer: ${customerData.name || "New"}${kvInfo}${addrInfo}. Tap to accept.`;
-
-    const payload = {
-      message: {
-        token: deviceToken.trim(),
-        android: {
-          priority: "high",
-          notification: {
-            title: "New Lead Assigned!",
-            body: statusBody,
-            sound: "kondaas",
-            channel_id: "custom_sound_channel_v2",
-            click_action: "LEAD_NOTIFICATION_ACTION",
-          }
-        },
-        data: {
-          type: "new_order",
-          title: "New Lead Assigned!",
-          body: statusBody,
-          customerName: String(customerData.name || "New Customer"),
-          customerMobile: String(customerData.mobile || ""),
-          leadId: leadId ? leadId.toString() : "",
-          kilovolt: kilovolt ? String(kilovolt) : "",
-          address: address || "",
-          show_actions: "true"
-        }
-      }
-    };
-
-    const response = await fetch("https://fcm.googleapis.com/v1/projects/kondaas-5dfaa/messages:send", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${accessToken}`, // Using our newly automated token!
-        "Content-Type": "application/json; charset=UTF-8"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    return response.ok;
-  } catch (err) {
-    console.error("❌ FCM Exception:", err.message);
-    return false;
-  }
-};
-
 export const addOrder = async (c) => {
   try {
     const body = await c.req.json();
@@ -100,16 +31,14 @@ export const addOrder = async (c) => {
       const keys = await getSystemKeys(db);
       const { todayDateOnly, todayKey } = getISTDateStrings();
 
-      // 🔄 UPDATED: Production Board & List Setup for Administration Board
       const boardId = "dbiYtzsTX7BaSX3pk";
-      const newEntryListId = "xSfLcnhqcz7h56hPz"; // New leads list
-      const flowtrixToken = keys.flowtrix?.boardToken || "fjfOx8r_zrkmU6A4XjBeXqwRvVAlTB7c2eklkav4PHj"; // Fallback token
+      const newEntryListId = "xSfLcnhqcz7h56hPz"; 
+      const flowtrixToken = keys.flowtrix?.boardToken || "fjfOx8r_zrkmU6A4XjBeXqwRvVAlTB7c2eklkav4PHj"; 
       
       let flowtrixCardId = null;
 
-      // Sync to Flowtrix FIRST to get the Card ID
+      // Sync to Flowtrix
       try {
-        // Port kept at 8080 for internal docker network communications
         const flowtrixResponse = await fetch(`http://flowtrix:8080/api/boards/${boardId}/lists/${newEntryListId}/cards`, {
           method: "POST",
           headers: {
@@ -119,20 +48,19 @@ export const addOrder = async (c) => {
           body: JSON.stringify({
             title: `${name}-${mobile}`,
             authorId: "Lxc9EwKM5j4ov95ZT",
-            swimlaneId: "rF336Crux7KAqNXmQ" // New Administration Swimlane ID
+            swimlaneId: "rF336Crux7KAqNXmQ" 
           })
         });
 
         if (flowtrixResponse.ok) {
           const responseData = await flowtrixResponse.json();
           flowtrixCardId = responseData._id; 
-          console.log("✅ Flowtrix Board Sync Successful. Card ID:", flowtrixCardId);
         }
       } catch (syncErr) {
         console.error("❌ Flowtrix Sync failed:", syncErr.message);
       }
 
-      // Save Lead to MongoDB (Including the captured Card ID)
+      // Save Lead to MongoDB (Marked as unaccepted)
       const result = await db.collection("lead").insertOne({
         name,
         mobile,
@@ -147,13 +75,13 @@ export const addOrder = async (c) => {
         kilovolt: kilovolt || null,
         status: "unaccepted",
         flowtrixCardId: flowtrixCardId,
-        currentListId: newEntryListId, // Initialized with xSfLcnhqcz7h56hPz
+        currentListId: newEntryListId, 
         createdAt: todayDateOnly,
       });
 
       const leadId = result.insertedId;
 
-      // Notification Logic (FCM)
+      // Geolocation and Cascading Worker Array Sorting
       if (latitude && longitude) {
         const activeWorkers = await db.collection("locations")
           .find({ [todayKey]: { $exists: true } }).toArray();
@@ -173,24 +101,28 @@ export const addOrder = async (c) => {
           }).filter(Boolean);
 
           if (workersWithDistance.length > 0) {
+            // Sort array so index 0 is the closest surveyor
             workersWithDistance.sort((a, b) => a.distance - b.distance);
             
-            const targetFcmToken = keys.firebase?.testFcmToken; 
+            console.log(`📋 Sorted ${workersWithDistance.length} surveyors by proximity for Lead ID: ${leadId}`);
+            
+            // 🚀 Background queue entry setup for cascading dispatch 
+            await db.collection("jobs_queue").insertOne({
+              taskType: "SURVEYOR_CASCADING_DISPATCH",
+              leadId: leadId,
+              surveyorsList: workersWithDistance, 
+              currentIndex: 0,                   
+              status: "pending",
+              runAt: new Date()                  
+            });
 
-            // 🤖 CLEANER & AUTOMATED: Calling the function without passing a manual token parameter
-            await sendFCMNotification(
-              targetFcmToken, 
-              { name, mobile }, 
-              leadId, 
-              kilovolt, 
-              address
-            );
+            console.log(`⏳ Cascading dispatch engine task initialized for Lead ID: ${leadId}`);
           }
         }
       }
 
       return c.json({ 
-        message: "Order added and synced successfully!", 
+        message: "Order added and cascading dispatch queue started successfully!", 
         id: leadId,
         flowtrixId: flowtrixCardId 
       }, 201);
@@ -289,7 +221,7 @@ export const syncToFlowtrix = async (c) => {
         );
 
         if (updateResult.modifiedCount > 0) {
-          console.log(`✅ DB Success: currentListId updated to ${targetListId}`);
+          
         }
 
         return c.json({ success: true, message: `Moved to ${status}` });
@@ -338,7 +270,7 @@ export const rejectOrder = async (c) => {
       }
 
       const currentOriginId = lead.currentListId || "xSfLcnhqcz7h56hPz";
-      console.log(`📡 Rejecting Lead: Moving from ${currentOriginId} -> To: ${rejectListId}`);
+      
 
       const boardId = "dbiYtzsTX7BaSX3pk";
       const flowtrixToken = keys.flowtrix?.boardToken || "SDkKCXbBAN3tf17Wwa-YPAl6S5dqUS6v_TFWBvaKLwe";
@@ -376,7 +308,7 @@ export const rejectOrder = async (c) => {
           }
         );
 
-        console.log(`✅ Lead for mobile ${customerMobile} marked as Rejected.`);
+        
         return c.json({ success: true, message: "Order rejected and synced successfully" });
       } else {
         const errorText = await response.text();

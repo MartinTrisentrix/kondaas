@@ -32,7 +32,7 @@ export const createReferral = async (c) => {
 
       // Direct insertion call
       await collection.insertOne(referralDocument);
-      console.log(`🤝 Referral record ${referralDocument._id} saved successfully.`);
+      
 
       return c.json({ success: true, referralId: referralDocument._id }, 201);
     });

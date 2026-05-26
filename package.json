@@ -15,10 +15,9 @@
     "@hono/node-server": "^1.19.14",
     "axios": "^1.16.0",
     "dotenv": "^17.4.2",
-    "google-auth-library": "^10.6.2",
+    "firebase-admin": "^13.10.0",
     "hono": "^4.12.9",
     "mongodb": "^7.1.0",
-    "puppeteer": "^24.43.0",
-    "zod": "^3.25.76"
+    "puppeteer": "^24.43.0"
   }
 }

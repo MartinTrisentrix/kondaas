@@ -73,7 +73,7 @@ export const calculateUserSavings = async (c) => {
 
         // If it was calculated less than 24 hours ago, return it immediately!
         if (hoursPassed < 24) {
-          console.log(`⚡ [Separate Cache Hit] Returning stored DB savings for station ${stationId}`);
+          
           return c.json({
             success: true,
             fromCache: true,
@@ -89,7 +89,7 @@ export const calculateUserSavings = async (c) => {
       }
 
       // 💥 LAYER 3: CACHE MISS -> FETCH FRESH DATA FROM SOLARMAN
-      console.log(`🔄 [Cache Miss/Expired] Fetching fresh calculations from Solarman for station ${stationId}`);
+      
 
       // 2. Obtain Token for Solarman
       const token = await getInternalSolarmanToken(
@@ -159,22 +159,11 @@ export const calculateUserSavings = async (c) => {
 
         // 🔍 LIVE DEBUG CONSOLE: Catching the current month's math in action
         if (monthKey === "2026-05") {
-          console.log("\n=================== 🕵️‍♂️ CURRENT MONTH DEBUG LOG ===================");
-          console.log("📍 Target Month Key:  ", monthKey);
-          console.log("📊 Raw Units Received:", rawUnits);
-          console.log("📑 State Logged:      ", parsed.state);
-          console.log("🔑 Generated StateId: ", stateId);
-          console.log("🗂️ Tariff Doc From DB:", tariffTemplate ? "FOUND (True)" : "NOT FOUND (False)");
           
-          if (tariffTemplate) {
-            console.log("📜 DB Tariff Type:    ", tariffTemplate.type);
-            console.log("📦 Total Rule Blocks: ", tariffTemplate.billingRules?.length || 0);
-          }
-
           // Force check the calculator utility's direct execution
           const testCost = SolarExportCalculator.calculateMonthlyCredit(rawUnits, tariffTemplate, monthKey);
-          console.log("💰 Final Math Output: ", testCost);
-          console.log("==================================================================\n");
+          
+          
         }
 
         const cost = SolarExportCalculator.calculateMonthlyCredit(rawUnits, tariffTemplate, monthKey);
@@ -212,7 +201,7 @@ export const calculateUserSavings = async (c) => {
         // Map generationTotal directly off the response object payload root properties
         if (realTimeJson && realTimeJson.generationTotal !== undefined) {
           trueApiLifetimeUnits = Number(realTimeJson.generationTotal);
-          console.log(`🎯Captured direct hardware odometer total: ${trueApiLifetimeUnits}`);
+          
         }
       } catch (failsafeErr) {
         console.error("⚠️ Failsafe realTime station fetch skipped:", failsafeErr.message);

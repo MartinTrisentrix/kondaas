@@ -26,7 +26,7 @@ export const createTicket = async (c) => {
 
       // Safely insert the complete object directly into MongoDB
       await collection.insertOne(ticketDocument);
-      console.log(`🎫 Ticket ${ticketDocument._id} stored successfully.`);
+      
 
       return c.json({ success: true, ticketId: ticketDocument._id });
     });

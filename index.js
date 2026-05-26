@@ -1,7 +1,33 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
+import { startQueueRunner } from './src/controllers/queueEngine.js';
 import 'dotenv/config';
+import admin from 'firebase-admin';
+import fs from 'fs';
+
+// 🔑 SAFE SERVICE ACCOUNT FALLBACK DETECTOR
+let firebaseCredential;
+
+try {
+  if (fs.existsSync('/app/firebase-key.json')) {
+    const rawKey = fs.readFileSync('/app/firebase-key.json', 'utf8');
+    firebaseCredential = admin.credential.cert(JSON.parse(rawKey));
+    console.log("🔑 Initializing Firebase with Direct Service Account Key File.");
+  } else {
+    firebaseCredential = admin.credential.applicationDefault();
+    console.log("☁️ Initializing Firebase with default Workload Identity Federation.");
+  }
+} catch (err) {
+  console.error("⚠️ Error parsing firebase-key.json, falling back to applicationDefault:", err.message);
+  firebaseCredential = admin.credential.applicationDefault();
+}
+
+// 🎯 Explicitly passing projectId to ensure Workload Identity targets the correct resource scope
+admin.initializeApp({
+  credential: firebaseCredential,
+  projectId: 'kondaas-5dfaa'
+});
 
 import locationRoutes from './src/routes/locationRoutes.js';
 import userRoutes from './src/routes/userRoutes.js';
@@ -37,3 +63,6 @@ serve({
 }, (info) => {
   console.log(`🚀 Kondaaas Backend Live: http://localhost:${info.port}`);
 });
+
+// 🕒 START THE BACKGROUND QUEUE RUNNER HERE 
+startQueueRunner();

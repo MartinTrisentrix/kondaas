@@ -7,10 +7,6 @@ import fs from 'fs';
 
 const MONGODB_URI = process.env.MONGODB_URI;
 
-/**
- * --- THE WORKER ---
- * Handles the actual WhatsApp API call in the background.
- */
 const processWhatsAppNotification = async (notificationId) => {
   try {
     await withDatabase(MONGODB_URI, async (db) => {

@@ -1,27 +1,45 @@
-# 1. Use the Node 20 environment
-FROM node:20-slim
-
-# 2. Install Puppeteer dependencies for Linux
-# This installs Chromium and the libraries needed to run a "headless" browser
-RUN apt-get update && apt-get install -y \
-    chromium \
-    fonts-ipafont-gothic fonts-wqy-zenhei fonts-thai-tlwg fonts-kacst fonts-freefont-ttf libxss1 \
-    --no-install-recommends && rm -rf /var/lib/apt/lists/*
-
-# 3. Create the working directory inside the "box"
+# ==========================================
+# STAGE 1: The Build Environment (Builder)
+# ==========================================
+FROM node:20-slim AS builder
 WORKDIR /app
 
-# 4. Copy your package files first
+# Copy your package configuration files first
 COPY package*.json ./
 
-# 5. Install your dependencies inside the box
-RUN npm install
+# 💡 TRICK 1: Block Puppeteer from automatically downloading its own massive browser copy
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
-# 6. Copy the rest of your code
+# Install your dependencies cleanly inside the build stage
+RUN npm ci
+
+# Copy the rest of your backend source code
 COPY . .
 
-# 7. Open Port 3000 (Adjusted to your 3002)
+
+# ==========================================
+# STAGE 2: The Lean Production Runner
+# ==========================================
+FROM node:20-slim
+WORKDIR /app
+
+# 💡 TRICK 2: Install ONLY the system Chromium and minimal fonts, 
+# then immediately clean up the apt cache records to save hundreds of MBs!
+RUN apt-get update && apt-get install -y \
+    chromium \
+    fonts-freefont-ttf \
+    libxss1 \
+    --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy the pre-built files and node_modules straight from Stage 1 (Builder)
+COPY --from=builder /app /app
+
+# 💡 TRICK 3: Force Puppeteer to launch the system-wide Linux Chromium executable path
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Open Port 3002
 EXPOSE 3002
 
-# 8. The command to start the server
+# The command to start your backend server
 CMD ["node", "index.js"]
