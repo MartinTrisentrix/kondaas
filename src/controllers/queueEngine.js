@@ -3,7 +3,7 @@ import { withDatabase } from '../utils/config.js';
 import { getSolarmanDataCore } from './solarmanController.js'; 
 import admin from 'firebase-admin';
 
-// 🚀 Helper function to send notifications for cascading leads
+// 🚀 Helper function to send notifications for cascading leads (KEEPS CUSTOM SOUND)
 const sendLeadFCMNotification = async (deviceToken, customerName, leadId, kilovolt, address) => {
   try {
     if (!deviceToken) return false;
@@ -20,7 +20,7 @@ const sendLeadFCMNotification = async (deviceToken, customerName, leadId, kilovo
         notification: {
           title: statusTitle,
           body: statusBody,
-          sound: "kondaas",
+          sound: "kondaas", // ✅ Kept for lead alerts
           channelId: "custom_sound_channel_v2",
           clickAction: "LEAD_NOTIFICATION_ACTION",
         }
@@ -188,7 +188,6 @@ const handleCascadingDispatchJob = async (db, job) => {
 
 const processAllCustomersWeeklyJobs = async (db, masterJob) => {
   try {
-    // 🔍 Pull users with registered devices
     const users = await db.collection("userDetails").find({ "PlatformInfo.devices.0": { $exists: true } }).toArray();
     console.log(`📋 Found ${users.length} users with registered devices in local userDetails collection.`);
 
@@ -208,7 +207,6 @@ const processAllCustomersWeeklyJobs = async (db, masterJob) => {
       const phoneNo = user._id;
       const stations = user.devicelist || [];
       
-      // 📱 EXTRACT ALL TOKENS (No longer filtering down to just lastLogin!)
       let tokensToBroadcast = [];
       if (user.PlatformInfo && Array.isArray(user.PlatformInfo.devices)) {
         tokensToBroadcast = user.PlatformInfo.devices
@@ -254,13 +252,12 @@ const processAllCustomersWeeklyJobs = async (db, masterJob) => {
         }
       }
 
-      // 🚀 TRANSMIT TO ALL REGISTERED TOKENS VIA SEND-EACH MULTICAST PACKET
+      // 🚀 TRANSMIT TO ALL REGISTERED TOKENS VIA SEND-EACH MULTICAST PACKET (REMOVED CUSTOM SOUND)
       if (processedStationsCount > 0) {
         totalUserWeeklyUnits = Number(totalUserWeeklyUnits.toFixed(2));
         const statusTitle = "☀️ Your Weekly Solar Report is Ready!";
         const finalNotificationBody = `Your weekly summary breakdown:\n${stationBreakdownText}Total Generation: ${totalUserWeeklyUnits} Units`;
         
-        // Map every token into an explicit individual message configuration payload
         const messagesPayload = tokensToBroadcast.map(token => ({
           token: token.trim(),
           notification: {
@@ -270,8 +267,8 @@ const processAllCustomersWeeklyJobs = async (db, masterJob) => {
           android: {
             priority: "high",
             notification: {
-              sound: "kondaas",
-              channelId: "custom_sound_channel_v2",
+              // 🧼 Removed sound: "kondaas" here so it uses the standard phone default alert
+              channelId: "weekly_summary_channel",
               clickAction: "WEEKLY_SUMMARY_NOTIFICATION_ACTION",
             }
           },
@@ -290,7 +287,6 @@ const processAllCustomersWeeklyJobs = async (db, masterJob) => {
           const batchResponse = await admin.messaging().sendEach(messagesPayload);
           console.log(`📋 Multicast results for ${phoneNo}: [${batchResponse.successCount} passed / ${batchResponse.failureCount} failed]`);
           
-          // 🧼 SELF-CLEANING RECOVERY MECHANISM
           for (let index = 0; index < batchResponse.responses.length; index++) {
             const singleResponse = batchResponse.responses[index];
             
@@ -300,7 +296,6 @@ const processAllCustomersWeeklyJobs = async (db, masterJob) => {
 
               console.warn(`⚠️ Target Token Delivery Failure Context:`, errorInstance.code);
 
-              // Catch uninstalled app or expired tokens specifically
               if (errorInstance.code === 'messaging/registration-token-not-registered') {
                 console.log(`🧼 Stale/Uninstalled device detected. Surgically plucking token from MongoDB...`);
                 
@@ -322,7 +317,7 @@ const processAllCustomersWeeklyJobs = async (db, masterJob) => {
       }
     }
 
-    // ⏱️ TESTING CYCLE TIMER: Keep it looping every 30 seconds for your device validation tests
+    // ⏱️ TESTING TIMER: Maintained at 30 seconds for your frequency check
     const nextRunTime = new Date();
     nextRunTime.setSeconds(nextRunTime.getSeconds() + 30); 
 
