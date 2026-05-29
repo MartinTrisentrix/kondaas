@@ -237,6 +237,7 @@ export const syncToFlowtrix = async (c) => {
   }
 };
 
+
 export const rejectOrder = async (c) => {
   try {
     const body = await c.req.json();
@@ -244,7 +245,7 @@ export const rejectOrder = async (c) => {
       customerMobile, 
       surveyorNumber, 
       comment,
-      receivedAt 
+      receivedAt,
     } = body;
 
     if (!comment) {
@@ -271,7 +272,6 @@ export const rejectOrder = async (c) => {
 
       const currentOriginId = lead.currentListId || "xSfLcnhqcz7h56hPz";
       
-
       const boardId = "dbiYtzsTX7BaSX3pk";
       const flowtrixToken = keys.flowtrix?.boardToken || "SDkKCXbBAN3tf17Wwa-YPAl6S5dqUS6v_TFWBvaKLwe";
 
@@ -297,17 +297,16 @@ export const rejectOrder = async (c) => {
       });
 
       if (response.ok) {
-        // 🔒 SAFE DATABASE UPDATE: Modifies tracking targets without adding timestamp data
-        await db.collection("lead").updateOne(
-          { _id: lead._id }, 
-          { 
-            $set: { 
-              currentListId: rejectListId, 
-              status: "rejected"
-            } 
-          }
-        );
+        // 📥 INSERT METADATA ONLY: Touches no other local collections; writes exclusively to admin_reject
+        const adminRejectPayload = {
+          surveyorNumber: surveyorNumber || "N/A",
+          customerMobile: customerMobile,
+          comment: comment,
+          time: receivedAt ? new Date(Number(receivedAt)).toISOString() : null // ⏱️ Single field provided by mobile
+        };
 
+        await db.collection("admin_reject").insertOne(adminRejectPayload);
+        console.log(`✅ Rejection tracked in admin_reject collection with single 'time' field for surveyor: ${surveyorNumber}`);
         
         return c.json({ success: true, message: "Order rejected and synced successfully" });
       } else {
@@ -322,6 +321,30 @@ export const rejectOrder = async (c) => {
   }
 };
 
+
+export const getAdminRejections = async (c) => {
+  try {
+    console.trace("🔍 SHOW ME WHO IS CALLING THIS FUNCTION:");
+    return await withDatabase(MONGODB_URI, async (db) => {
+
+      const rejections = await db.collection("admin_reject")
+        .find({})
+        .sort({ time: -1 })
+        .toArray();
+
+      console.log(`📋 Retrieved ${rejections.length} logs from admin_reject collection.`);
+
+      return c.json({ 
+        success: true, 
+        count: rejections.length,
+        data: rejections 
+      }, 200);
+    });
+  } catch (err) {
+    console.error("❌ getAdminRejections Exception Error:", err.message);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+};
 
 
 export const updateOrder = async (c) => {

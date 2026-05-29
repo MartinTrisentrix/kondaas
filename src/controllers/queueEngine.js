@@ -274,7 +274,7 @@ const processAllCustomersWeeklyJobs = async (db, masterJob) => {
           android: {
             priority: "high",
             notification: {
-              channelId: "weekly_summary_channel_v1", // Clean channel for standard alerts
+              channelId: "weekly_summary_channel_v1", // Clean channel for standard alerts     
               sound: "default",                        // Android Native Default Sound
               clickAction: "WEEKLY_SUMMARY_NOTIFICATION_ACTION",
             }
@@ -413,8 +413,8 @@ const processAllCustomersMonthlyJobs = async (db, masterJob) => {
               if (item.generationValue) {
                 stationUnits += Number(item.generationValue);
               }
-            });
-          }
+            });     
+          }                                
 
           totalUserMonthlyUnits += stationUnits;
           processedStationsCount++;
