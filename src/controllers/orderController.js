@@ -331,7 +331,7 @@ export const rejectOrder = async (c) => {
 
 export const getAdminRejections = async (c) => {
   try {
-    console.trace("🔍 SHOW ME WHO IS CALLING THIS FUNCTION:");
+    
     return await withDatabase(MONGODB_URI, async (db) => {
 
       const rejections = await db.collection("admin_reject")
@@ -362,11 +362,11 @@ export const updateOrder = async (c) => {
       const existing = await db.collection("lead").findOne({ mobile });
       if (!existing) return c.json({ error: "Order not found!" }, 404);
 
-      const { name, whatsappNo, email, city, comment, referredBy, latitude, longitude, address } = body;
+      const { name, mobile, whatsappNo, email, city, comment, referredBy, latitude, longitude, address, kilovolt  } = body;
 
       await db.collection("lead").updateOne(
         { mobile },
-        { $set: { name, whatsappNo: whatsappNo || null, email: email || null, city, comment, referredBy, latitude, longitude, address } }
+        { $set: { name, mobile, whatsappNo: whatsappNo || null, email: email || null, city, comment, referredBy, latitude, longitude, address, kilovolt: kilovolt || null } }
       );
       return c.json({ message: "Order updated successfully!" });
     });
@@ -399,6 +399,46 @@ export const getOrders = async (c) => {
     });
     return c.json(orders);
   } catch (err) {
+    return c.json({ error: "Internal server error" }, 500);
+  }
+};
+
+
+export const deleteOrder = async (c) => {
+  try {
+    const body = await c.req.json();
+    const { mobile } = body;
+
+    // 🛡️ Validation: Ensure mobile is provided in the request body
+    if (!mobile) {
+      return c.json({ error: "Customer mobile number is required to delete a lead" }, 400);
+    }
+
+    return await withDatabase(MONGODB_URI, async (db) => {
+      // 🗑️ Delete lead matching any type format (String or Number)
+      const result = await db.collection("lead").deleteOne({
+        $or: [
+          { mobile: mobile },
+          { mobile: String(mobile) },
+          { mobile: Number(mobile) }
+        ]
+      });
+
+      // 🔍 Check if a document was actually found and deleted
+      if (result.deletedCount === 0) {
+        console.warn(`⚠️ Deletion failed: No lead found for mobile: ${mobile}`);
+        return c.json({ error: "Lead not found in database." }, 404);
+      }
+
+      console.log(`✅ Successfully deleted lead with mobile: ${mobile} from lead collection.`);
+      
+      return c.json({ 
+        success: true, 
+        message: "Lead deleted successfully from the database." 
+      }, 200);
+    });
+  } catch (err) {
+    console.error("❌ deleteOrder Exception Error:", err.message);
     return c.json({ error: "Internal server error" }, 500);
   }
 };
