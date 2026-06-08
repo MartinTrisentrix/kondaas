@@ -3,8 +3,13 @@ import { createTemplate, updateTemplate, getTemplate } from '../controllers/temp
 
 const templateRoutes = new Hono();
 
+
 templateRoutes.post('/create', createTemplate);
+
+
 templateRoutes.put('/update', updateTemplate);
-templateRoutes.get('/get', getTemplate);
+
+
+templateRoutes.get('/get/:id', getTemplate);
 
 export default templateRoutes;

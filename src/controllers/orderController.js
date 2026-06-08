@@ -34,71 +34,29 @@ export const addOrder = async (c) => {
   try {
     const body = await c.req.json();
     
-    // Destructure every single field from your friend's 6 form sections + geolocation
-    const {
-      // Section 1: Lead Information
-      title,
-      firstName,
-      lastName,
-      customerName,
-      employeeName,
-      phone,
-      mobile,
-      whatsapp,
-      email,
-      secondaryEmail,
-      company,
-      website,
-      fax,
-      leadSource,
-      leadStatus,
-      industry,
-      annualRevenue,
-      noOfEmployees,
-      rating,
-      skypeId,
-      twitter,
-      socialLeadId,
-      emailOptOut,
-
-      // Section 2: Requirements
-      requirementType,
-      serviceType,
-      ebNumbers,
-      wattageRequired,
-      typeOfRoof,
-      planningToInstall,
-      monthlyBill,
-      purposeOfSolar,
-
-      // Section 3: Address Information
-      street,
-      district,
-      province,
-      country,
-      postalCode,
-
-      // Section 4: Description Information
-      description,
-
-      // Section 5: Follow Up Information
-      nextFollowUp,
-      futureProspect,
-
-      // Geolocation Coordinates
-      latitude,
-      longitude
-    } = body;
+    // 🔍 Extract only the mandatory key parameters required for validation, Zoho lookup, and Geolocation
+    const mobile = body.mobileNumber || body.mobile; 
+    const customerName = body.customerName || body.firstName;
+    const { latitude, longitude, description } = body;
 
     // 🛑 Strict Business Rule: Mobile Number is mandatory!
     if (!mobile) {
-      return c.json({ error: "Validation Error: Mobile number is required to register a lead." }, 400);
+      return c.json({ error: "Validation Error: Mobile number field is required to register a lead." }, 400);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
+      // 1. Strict Local Duplicate Check: Ensure this mobile isn't already registered in the forms collection
+      const existingForm = await db.collection("forms").findOne({ 
+        $or: [{ mobile: String(mobile) }, { mobileNumber: String(mobile) }] 
+      });
+      
+      if (existingForm) {
+        return c.json({ error: "Validation Error: This mobile number is already registered!" }, 400);
+      }
+
       const { todayKey } = getISTDateStrings();
 
-      // 🔐 Grab active authorization credentials dynamically out of RAM / your clean utility file
+      // 🔐 Grab active authorization credentials dynamically out of RAM / config collection
       const zohoToken = await getZohoAccessToken(db);
 
       // 🗺️ Format Coordinate notes cleanly to bundle at the top of description details
@@ -106,70 +64,69 @@ export const addOrder = async (c) => {
       const finalDescription = `${geoInfo}${description || ''}`.trim();
 
       // 🏷️ Compute the Last_Name property cleanly since Zoho strictly mandates its existence
-      // If firstName or lastName are missing, fallback smoothly to the customerName string, or "Unknown Lead"
-      const computedLastName = lastName || firstName || customerName || "Unknown Lead";
+      const computedLastName = body.lastName || body.firstName || customerName || "Unknown Lead";
 
-      // 📦 Structure the payload to adapt directly to Zoho CRM API field naming mappings safely
+      // 📦 Structure the payload dynamically matching what Zoho expects, filling from the dynamic body keys
       const zohoPayload = {
         data: [
           {
             // Mandatory Profile Block
             Last_Name: computedLastName,
-            Customer_Name: customerName || firstName || "Unknown Lead",
-            Salutation: title || null,
-            First_Name: firstName || null,
-            Employee_Name: employeeName || null,
+            Customer_Name: customerName || "Unknown Lead",
+            Salutation: body.title || null,
+            First_Name: body.firstName || null,
+            Employee_Name: body.employeeName || null,
             
             // Communications
-            Phone: phone ? String(phone) : null,
+            Phone: body.phone ? String(body.phone) : null,
             Mobile: String(mobile),
-            Whatsapp_Number: whatsapp ? String(whatsapp) : null,
-            Email: email || null,
-            Secondary_Email: secondaryEmail || null,
-            Fax: fax ? String(fax) : null,
-            Skype_ID: skypeId || null,
-            Twitter: twitter || null,
-            Social_Lead_ID: socialLeadId || null,
-            Email_Opt_Out: emailOptOut === true || emailOptOut === "true",
+            Whatsapp_Number: body.whatsapp || body.whatsappNo ? String(body.whatsapp || body.whatsappNo) : null,
+            Email: body.email || null,
+            Secondary_Email: body.secondaryEmail || null,
+            Fax: body.fax ? String(body.fax) : null,
+            Skype_ID: body.skypeId || null,
+            Twitter: body.twitter || null,
+            Social_Lead_ID: body.socialLeadId || null,
+            Email_Opt_Out: body.emailOptOut === true || body.emailOptOut === "true",
 
             // Company Meta Info
-            Company: company || "Individual", // Zoho standard modules prefer having a Company value string or default
-            Website: website || null,
-            Industry: industry || null,
-            Annual_Revenue: annualRevenue ? Number(annualRevenue) : null,
-            No_of_Employees: noOfEmployees ? Number(noOfEmployees) : null,
-            Rating: rating || null,
+            Company: body.company || "Individual",
+            Website: body.website || null,
+            Industry: body.industry || null,
+            Annual_Revenue: body.annualRevenue ? Number(body.annualRevenue) : null,
+            No_of_Employees: body.noOfEmployees ? Number(body.noOfEmployees) : null,
+            Rating: body.rating || null,
 
             // Core Source & Custom Manual Lifecycle settings 
-            Lead_Source: leadSource || null,
-            Lead_Status: leadStatus || null,
+            Lead_Source: body.leadSource || null,
+            Lead_Status: body.leadStatus || null,
 
             // Solar Engineering Requirements Mappings
-            Requirement_Type: requirementType || null,
-            Service_Type: serviceType || null,
-            EB_Numbers: ebNumbers || null,
-            Wattage_Required: wattageRequired ? String(wattageRequired) : null,
-            Type_of_Roof: typeOfRoof || null,
-            When_Planning_to_Install: planningToInstall || null,
-            Average_Monthly_Bill: monthlyBill ? Number(monthlyBill) : null,
-            Purpose_of_Solar: purposeOfSolar || null,
+            Requirement_Type: body.requirementType || null,
+            Service_Type: body.serviceType || null,
+            EB_Numbers: body.ebNumbers || null,
+            Wattage_Required: body.wattageRequired || body.kilovolt ? String(body.wattageRequired || body.kilovolt) : null,
+            Type_of_Roof: body.typeOfRoof || null,
+            When_Planning_to_Install: body.planningToInstall || null,
+            Average_Monthly_Bill: body.monthlyBill ? Number(body.monthlyBill) : null,
+            Purpose_of_Solar: body.purposeOfSolar || null,
 
             // Core Address Block Info
-            Street: street || null,
-            City: district || null,        // Your district mapping fits into Zoho's regional standard 'City' field
-            State: province || null,
-            Country: country || null,
-            Zip_Code: postalCode ? String(postalCode) : null,
+            Street: body.street || body.address || null,
+            City: body.district || body.city || null,
+            State: body.province || null,
+            Country: body.country || null,
+            Zip_Code: body.postalCode ? String(body.postalCode) : null,
 
             // Operational Scheduler & Dynamic Description Strings
             Description: finalDescription || null,
-            Next_Follow_Up: nextFollowUp || null,
-            Future_Prospect_Date: futureProspect || null
+            Next_Follow_Up: body.nextFollowUp || null,
+            Future_Prospect_Date: body.futureProspect || null
           }
         ]
       };
 
-      console.log(`📡 Sending full flexible layout payload to Zoho CRM for customer: ${customerName || firstName || 'New Lead'}`);
+      console.log(`📡 Sending dynamic form payload to Zoho CRM for customer: ${customerName || 'New Lead'}`);
 
       const zohoResponse = await fetch("https://www.zohoapis.in/crm/v8/Leads", {
         method: "POST",
@@ -193,7 +150,6 @@ export const addOrder = async (c) => {
         return c.json({ error: "High level payload error rejected by Zoho.", details: statusBlock }, 400);
       }
 
-      // 🔍 Extract the unique Zoho Record String ID!
       const zohoLeadId = statusBlock.details.id;
       console.log(`✅ Record successfully provisioned. Zoho Lead ID: ${zohoLeadId}`);
 
@@ -219,9 +175,6 @@ export const addOrder = async (c) => {
           if (workersWithDistance.length > 0) {
             workersWithDistance.sort((a, b) => a.distance - b.distance);
             
-            console.log(`📋 Sorted ${workersWithDistance.length} surveyors by proximity for Zoho Lead ID: ${zohoLeadId}`);
-            
-            // 🚀 Insert assignment task into local jobs queue using Zoho Lead ID
             await db.collection("jobs_queue").insertOne({
               taskType: "SURVEYOR_CASCADING_DISPATCH",
               leadId: zohoLeadId,
@@ -236,9 +189,19 @@ export const addOrder = async (c) => {
         }
       }
 
+      // 📥 Save the complete dynamic payload to MongoDB exactly like your addForm controller!
+      await db.collection("forms").insertOne({
+        mobileNumber: String(mobile),
+        zohoLeadId: zohoLeadId,
+        createdAt: new Date(),
+        ...body // Saves all key-values produced by the UI schema directly into Atlas
+      });
+
+      console.log(`📥 Raw form data successfully archived in local Atlas 'forms' collection.`);
+
       return c.json({ 
         success: true,
-        message: "Order successfully added and cascading background routing initialized!", 
+        message: "Order successfully added, Zoho synced, and dynamic form collection archived!", 
         id: zohoLeadId
       }, 201);
     });
