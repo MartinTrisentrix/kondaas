@@ -153,7 +153,7 @@ export const triggerScenarioNotification = async (c) => {
       }
 
       return c.json({ 
-        message: `Scenario ${scenarioType} message sent. PDF processing in background.`, 
+        message: `Scenario ${scenarioType} message sent.`, 
         id: textResult.insertedId 
       });
     });

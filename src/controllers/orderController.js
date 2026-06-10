@@ -240,6 +240,30 @@ export const rejectOrder = async (c) => {
   }
 };
 
+export const completeOrder = async (c) => {
+  try {
+    const body = await c.req.json();
+    const { customerMobile, surveyorNumber, receivedAt } = body;
+
+    return await withDatabase(MONGODB_URI, async (db) => {
+      // Safe local insert maintaining standard auditing schemas exclusively
+      const adminCompletePayload = {
+        surveyorNumber: surveyorNumber || "N/A",
+        customerMobile: customerMobile,
+        time: receivedAt ? new Date(Number(receivedAt)).toISOString() : null
+      };
+
+      await db.collection("admin_complete").insertOne(adminCompletePayload);
+      console.log(`✅ Completion tracked locally in admin_complete collection for surveyor: ${surveyorNumber}`);
+      
+      return c.json({ success: true, message: "Order completion cataloged locally." });
+    });
+  } catch (err) {
+    console.error("❌ Completion Exception Error:", err.message);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+};
+
 export const getAdminRejections = async (c) => {
   try {
     return await withDatabase(MONGODB_URI, async (db) => {
@@ -251,166 +275,53 @@ export const getAdminRejections = async (c) => {
   }
 };
 
+export const getAdminCompletions = async (c) => {
+  try {
+    return await withDatabase(MONGODB_URI, async (db) => {
+      const completions = await db.collection("admin_complete").find({}).sort({ time: -1 }).toArray();
+      return c.json({ success: true, count: completions.length, data: completions }, 200);
+    });
+  } catch (err) {
+    return c.json({ error: "Internal server error" }, 500);
+  }
+};
+
 /**
+
  * 🔄 Update Order (Matches fields exactly with addOrder manual fallback pattern)
  */
 export const updateOrder = async (c) => {
   try {
     const body = await c.req.json();
     
-    // Extract every single field exactly like your addOrder function
-    const {
-      // Section 1: Lead Information
-      title,
-      firstName,
-      lastName,
-      customerName,
-      employeeName,
-      phone,
-      mobile,
-      whatsapp,
-      email,
-      secondaryEmail,
-      company,
-      website,
-      fax,
-      leadSource,
-      leadStatus,
-      industry,
-      annualRevenue,
-      noOfEmployees,
-      rating,
-      skypeId,
-      twitter,
-      socialLeadId,
-      emailOptOut,
-
-      // Section 2: Requirements
-      requirementType,
-      serviceType,
-      ebNumbers,
-      wattageRequired,
-      typeOfRoof,
-      planningToInstall,
-      monthlyBill,
-      purposeOfSolar,
-
-      // Section 3: Address Information
-      street,
-      district,
-      province,
-      country,
-      postalCode,
-
-      // Section 4: Description Information
-      description,
-
-      // Section 5: Follow Up Information
-      nextFollowUp,
-      futureProspect,
-
-      // Geolocation Coordinates
-      latitude,
-      longitude
-    } = body;
-
-    // 🛑 Strict Business Rule: Mobile Number is mandatory to run the search lookup
-    if (!mobile) {
-      return c.json({ error: "Validation Error: Mobile number is required to update a lead." }, 400);
+    // 🛑 Strict Business Rule: Explicit Zoho 'id' string is mandatory to target the right lead
+    if (!body.id) {
+      return c.json({ error: "Validation Error: A specific Zoho 'id' field is required to update an order." }, 400);
     }
 
+    const targetZohoId = body.id;
+
     return await withDatabase(MONGODB_URI, async (db) => {
-      // 🔐 Grab active authorization credentials dynamically out of RAM / config collection
+      // 🔐 Grab active authorization credentials dynamically
       const zohoToken = await getZohoAccessToken(db);
 
-      // 🔍 Find the unique Zoho record ID by searching for the mobile number
-      console.log(`🔍 Searching Zoho CRM for profile matching phone: ${mobile}`);
-      const searchResponse = await fetch(`https://www.zohoapis.in/crm/v8/Leads/search?phone=${mobile}`, {
-        method: "GET",
-        headers: { "Authorization": `Zoho-oauthtoken ${zohoToken}` }
-      });
-
-      const searchResult = await searchResponse.json();
-      const zohoRecord = searchResult.data?.[0];
-
-      if (!zohoRecord?.id) {
-        return c.json({ error: "Lead profile not found in Zoho CRM using provided mobile key." }, 404);
-      }
-
-      // 🗺️ Format Coordinate notes cleanly to bundle at the top of description details
-      const geoInfo = latitude && longitude ? `[Coordinates: ${latitude}, ${longitude}]\n` : '';
-      const finalDescription = `${geoInfo}${description || ''}`.trim();
-
-      // 🏷️ Compute the Last_Name property cleanly matching addOrder logic
-      const computedLastName = lastName || firstName || customerName || "Unknown Lead";
-
-      // 📦 Structure the payload using your exact manual fallback layout block style
+      // 📦 Build the pure dynamic update payload
       const zohoPayload = {
         data: [
           {
-            // Zoho mandates the record ID inside the data block array for PUT requests
-            id: zohoRecord.id,
+            // Inject the specific ID inside the data block array as mandated by Zoho API guidelines
+            id: targetZohoId,
 
-            // Mandatory Profile Block
-            Last_Name: computedLastName,
-            Customer_Name: customerName || firstName || "Unknown Lead",
-            Salutation: title || null,
-            First_Name: firstName || null,
-            Employee_Name: employeeName || null,
-            
-            // Communications
-            Phone: phone ? String(phone) : null,
-            Mobile: String(mobile),
-            Whatsapp_Number: whatsapp ? String(whatsapp) : null,
-            Email: email || null,
-            Secondary_Email: secondaryEmail || null,
-            Fax: fax ? String(fax) : null,
-            Skype_ID: skypeId || null,
-            Twitter: twitter || null,
-            Social_Lead_ID: socialLeadId || null,
-            Email_Opt_Out: emailOptOut === true || emailOptOut === "true",
-
-            // Company Meta Info
-            Company: company || "Individual", 
-            Website: website || null,
-            Industry: industry || null,
-            Annual_Revenue: annualRevenue ? Number(annualRevenue) : null,
-            No_of_Employees: noOfEmployees ? Number(noOfEmployees) : null,
-            Rating: rating || null,
-
-            // Core Source & Custom Manual Lifecycle settings 
-            Lead_Source: leadSource || null,
-            Lead_Status: leadStatus || null,
-
-            // Solar Engineering Requirements Mappings
-            Requirement_Type: requirementType || null,
-            Service_Type: serviceType || null,
-            EB_Numbers: ebNumbers || null,
-            Wattage_Required: wattageRequired ? String(wattageRequired) : null,
-            Type_of_Roof: typeOfRoof || null,
-            When_Planning_to_Install: planningToInstall || null,
-            Average_Monthly_Bill: monthlyBill ? Number(monthlyBill) : null,
-            Purpose_of_Solar: purposeOfSolar || null,
-
-            // Core Address Block Info
-            Street: street || null,
-            City: district || null,        // District maps to Zoho standard 'City' field
-            State: province || null,
-            Country: country || null,
-            Zip_Code: postalCode ? String(postalCode) : null,
-
-            // Operational Scheduler & Dynamic Description Strings
-            Description: finalDescription || null,
-            Next_Follow_Up: nextFollowUp || null,
-            Future_Prospect_Date: futureProspect || null
+            // 🚀 Directly dump every single other field passed from the frontend completely as-is
+            ...body
           }
         ]
       };
 
-      console.log(`📡 Sending layout sync updates to Zoho CRM for Lead ID: ${zohoRecord.id}`);
+      console.log(`📡 Forwarding pure target update to Zoho CRM for explicit Record ID: ${targetZohoId}`);
 
-      // 3. Make the PUT update request to Zoho CRM API module endpoint
-      const response = await fetch(`https://www.zohoapis.in/crm/v8/Leads/${zohoRecord.id}`, {
+      // 3. Make the PUT update request directly to that specific record's endpoint string
+      const response = await fetch(`https://www.zohoapis.in/crm/v8/Leads/${targetZohoId}`, {
         method: "PUT",
         headers: {
           "Authorization": `Zoho-oauthtoken ${zohoToken}`,
@@ -427,8 +338,8 @@ export const updateOrder = async (c) => {
 
       return c.json({ 
         success: true, 
-        message: "Zoho CRM profile data synchronized cleanly!", 
-        id: zohoRecord.id 
+        message: "Targeted Zoho CRM profile data synchronized cleanly!", 
+        id: targetZohoId 
       });
     });
   } catch (err) {
