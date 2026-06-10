@@ -34,99 +34,37 @@ export const addOrder = async (c) => {
   try {
     const body = await c.req.json();
     
-    // 🔍 Extract only the mandatory key parameters required for validation, Zoho lookup, and Geolocation
-    const mobile = body.mobileNumber || body.mobile; 
-    const customerName = body.customerName || body.firstName;
-    const { latitude, longitude, description } = body;
+    // 🔍 Extract only what's needed for the background geolocation dispatch engine
+    const mobile = body.mobileNumber || body.mobile || body.Mobile; 
+    const customerName = body.customerName || body.firstName || body.First_Name;
+    const { latitude, longitude } = body;
 
-    // 🛑 Strict Business Rule: Mobile Number is mandatory!
+    // 🛑 Strict Business Rule: Mobile Number is mandatory for Zoho Leads
     if (!mobile) {
       return c.json({ error: "Validation Error: Mobile number field is required to register a lead." }, 400);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // 1. Strict Local Duplicate Check: Ensure this mobile isn't already registered in the forms collection
-      const existingForm = await db.collection("forms").findOne({ 
-        $or: [{ mobile: String(mobile) }, { mobileNumber: String(mobile) }] 
-      });
-      
-      if (existingForm) {
-        return c.json({ error: "Validation Error: This mobile number is already registered!" }, 400);
-      }
-
-      const { todayKey } = getISTDateStrings();
-
-      // 🔐 Grab active authorization credentials dynamically out of RAM / config collection
+      // 🔐 Grab active authorization credentials dynamically
       const zohoToken = await getZohoAccessToken(db);
 
-      // 🗺️ Format Coordinate notes cleanly to bundle at the top of description details
-      const geoInfo = latitude && longitude ? `[Coordinates: ${latitude}, ${longitude}]\n` : '';
-      const finalDescription = `${geoInfo}${description || ''}`.trim();
+      // 🏷️ Compute mandatory fallback fields that Zoho strictly rejects if missing
+      const computedLastName = body.lastName || body.Last_Name || body.firstName || body.First_Name || customerName || "Unknown Lead";
 
-      // 🏷️ Compute the Last_Name property cleanly since Zoho strictly mandates its existence
-      const computedLastName = body.lastName || body.firstName || customerName || "Unknown Lead";
-
-      // 📦 Structure the payload dynamically matching what Zoho expects, filling from the dynamic body keys
+      // 📦 Pure Dynamic Payload Builder
       const zohoPayload = {
         data: [
           {
-            // Mandatory Profile Block
+            ...body,
+
+            // Enforce mandatory fallbacks so the API remains happy
             Last_Name: computedLastName,
-            Customer_Name: customerName || "Unknown Lead",
-            Salutation: body.title || null,
-            First_Name: body.firstName || null,
-            Employee_Name: body.employeeName || null,
-            
-            // Communications
-            Phone: body.phone ? String(body.phone) : null,
-            Mobile: String(mobile),
-            Whatsapp_Number: body.whatsapp || body.whatsappNo ? String(body.whatsapp || body.whatsappNo) : null,
-            Email: body.email || null,
-            Secondary_Email: body.secondaryEmail || null,
-            Fax: body.fax ? String(body.fax) : null,
-            Skype_ID: body.skypeId || null,
-            Twitter: body.twitter || null,
-            Social_Lead_ID: body.socialLeadId || null,
-            Email_Opt_Out: body.emailOptOut === true || body.emailOptOut === "true",
-
-            // Company Meta Info
-            Company: body.company || "Individual",
-            Website: body.website || null,
-            Industry: body.industry || null,
-            Annual_Revenue: body.annualRevenue ? Number(body.annualRevenue) : null,
-            No_of_Employees: body.noOfEmployees ? Number(body.noOfEmployees) : null,
-            Rating: body.rating || null,
-
-            // Core Source & Custom Manual Lifecycle settings 
-            Lead_Source: body.leadSource || null,
-            Lead_Status: body.leadStatus || null,
-
-            // Solar Engineering Requirements Mappings
-            Requirement_Type: body.requirementType || null,
-            Service_Type: body.serviceType || null,
-            EB_Numbers: body.ebNumbers || null,
-            Wattage_Required: body.wattageRequired || body.kilovolt ? String(body.wattageRequired || body.kilovolt) : null,
-            Type_of_Roof: body.typeOfRoof || null,
-            When_Planning_to_Install: body.planningToInstall || null,
-            Average_Monthly_Bill: body.monthlyBill ? Number(body.monthlyBill) : null,
-            Purpose_of_Solar: body.purposeOfSolar || null,
-
-            // Core Address Block Info
-            Street: body.street || body.address || null,
-            City: body.district || body.city || null,
-            State: body.province || null,
-            Country: body.country || null,
-            Zip_Code: body.postalCode ? String(body.postalCode) : null,
-
-            // Operational Scheduler & Dynamic Description Strings
-            Description: finalDescription || null,
-            Next_Follow_Up: body.nextFollowUp || null,
-            Future_Prospect_Date: body.futureProspect || null
+            Mobile: String(mobile)
           }
         ]
       };
 
-      console.log(`📡 Sending dynamic form payload to Zoho CRM for customer: ${customerName || 'New Lead'}`);
+      console.log(`📡 Forwarding pure dynamic payload to Zoho CRM for customer: ${customerName || 'New Lead'}`);
 
       const zohoResponse = await fetch("https://www.zohoapis.in/crm/v8/Leads", {
         method: "POST",
@@ -155,6 +93,7 @@ export const addOrder = async (c) => {
 
       // 📡 Proximity Geolocation Scan and Surveyor Queue Cascading Dispatch Engine
       if (latitude && longitude) {
+        const { todayKey } = getISTDateStrings();
         const activeWorkers = await db.collection("locations")
           .find({ [todayKey]: { $exists: true } }).toArray();
 
@@ -189,19 +128,9 @@ export const addOrder = async (c) => {
         }
       }
 
-      // 📥 Save the complete dynamic payload to MongoDB exactly like your addForm controller!
-      await db.collection("forms").insertOne({
-        mobileNumber: String(mobile),
-        zohoLeadId: zohoLeadId,
-        createdAt: new Date(),
-        ...body // Saves all key-values produced by the UI schema directly into Atlas
-      });
-
-      console.log(`📥 Raw form data successfully archived in local Atlas 'forms' collection.`);
-
       return c.json({ 
         success: true,
-        message: "Order successfully added, Zoho synced, and dynamic form collection archived!", 
+        message: "Order successfully added, Zoho synced dynamically, and dispatch engine triggered!", 
         id: zohoLeadId
       }, 201);
     });
@@ -416,38 +345,26 @@ export const getOrders = async (c) => {
 export const deleteOrder = async (c) => {
   try {
     const body = await c.req.json();
-    const { mobile } = body;
-
-    // 🛑 Strict Business Rule: Mobile Number is required to locate the profile to remove
-    if (!mobile) {
-      return c.json({ error: "Validation Error: Mobile number field key is required to delete a lead." }, 400);
+    
+    // 🛑 Strict Business Rule: Explicit Zoho 'id' string is mandatory to target the precise lead
+    if (!body.id) {
+      return c.json({ error: "Validation Error: A specific Zoho 'id' field is required to delete an order." }, 400);
     }
 
+    const targetZohoId = body.id;
+
     return await withDatabase(MONGODB_URI, async (db) => {
-      // 🔐 Grab active authorization credentials dynamically out of RAM / config collection
+      // 🔐 Grab active authorization credentials dynamically
       const zohoToken = await getZohoAccessToken(db);
 
-      console.log(`🔍 Searching Zoho CRM to find profile deletion match for phone: ${mobile}`);
-      
-      // 🔍 Find the unique Zoho record ID by searching for the mobile number
-      const searchResponse = await fetch(`https://www.zohoapis.in/crm/v8/Leads/search?phone=${mobile}`, {
-        method: "GET",
-        headers: { "Authorization": `Zoho-oauthtoken ${zohoToken}` }
-      });
+      console.log(`🗑️ Initializing targeted erasure from Zoho CRM for Lead ID: ${targetZohoId}`);
 
-      const searchResult = await searchResponse.json();
-      const zohoRecord = searchResult.data?.[0];
-
-      if (!zohoRecord?.id) {
-        return c.json({ error: "Lead profile not found in Zoho CRM using provided mobile key." }, 404);
-      }
-
-      console.log(`🗑️ Erasing record from Zoho CRM matching Lead ID: ${zohoRecord.id}`);
-
-      // 💥 Send the HTTP DELETE request straight to Zoho's explicit record endpoint URL
-      const response = await fetch(`https://www.zohoapis.in/crm/v8/Leads/${zohoRecord.id}`, {
+      // 💥 Send the HTTP DELETE request straight to Zoho's explicit record endpoint URL string
+      const response = await fetch(`https://www.zohoapis.in/crm/v8/Leads/${targetZohoId}`, {
         method: "DELETE",
-        headers: { "Authorization": `Zoho-oauthtoken ${zohoToken}` }
+        headers: { 
+          "Authorization": `Zoho-oauthtoken ${zohoToken}` 
+        }
       });
 
       if (!response.ok) {
@@ -456,12 +373,12 @@ export const deleteOrder = async (c) => {
         return c.json({ error: "Zoho CRM deletion operation failed.", details: errDetails }, 500);
       }
 
-      console.log(`✅ Successfully deleted lead with mobile: ${mobile} from Zoho CRM.`);
+      console.log(`✅ Successfully deleted lead with ID: ${targetZohoId} from Zoho CRM.`);
       
       return c.json({ 
         success: true, 
         message: "Lead record deleted successfully from Zoho CRM.",
-        id: zohoRecord.id
+        id: targetZohoId
       }, 200);
     });
   } catch (err) {
