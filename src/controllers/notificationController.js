@@ -77,13 +77,12 @@ const processWhatsAppNotification = async (notificationId) => {
  */
 export const triggerScenarioNotification = async (c) => {
   try {
-    const { surveyorNumber, customerMobile, scenarioType, eta, mapsUrl } = await c.req.json();
+    const { surveyorNumber, customerMobile,name,scenarioType, eta, mapsUrl } = await c.req.json();
     return await withDatabase(MONGODB_URI, async (db) => {
-      // --- STEP 1: VERIFY EXISTENCE IN LEADS ---
-      const lead = await db.collection("lead").findOne({ mobile: customerMobile });
-      if (!lead) return c.json({ error: "Lead not found in leads collection" }, 404);
-      const customerName = lead.name || "Customer";
-      const whatsappTo = lead.whatsappNo || lead.mobile;
+     
+
+      const customerName = name;
+      const whatsappTo =customerMobile;
       
       const messages = {
         1: `Hello ${customerName}, your Kondaas technician has started. Arrival in ${eta || 'soon'} min. Contact: ${surveyorNumber}.${mapsUrl ? `\n\n📍 Track Location: ${mapsUrl}` : ''}`,

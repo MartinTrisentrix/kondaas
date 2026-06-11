@@ -143,7 +143,7 @@ export const addOrder = async (c) => {
 export const rejectOrder = async (c) => {
   try {
     const body = await c.req.json();
-    const { customerMobile, surveyorNumber, comment, receivedAt } = body;
+    const { customerMobile, surveyorNumber, comment, receivedAt,name,address } = body;
 
     if (!comment) {
       return c.json({ error: "Rejection reason (comment) is required" }, 400);
@@ -152,6 +152,8 @@ export const rejectOrder = async (c) => {
     return await withDatabase(MONGODB_URI, async (db) => {
       // Safe local insert maintaining standard auditing schemas exclusively
       const adminRejectPayload = {
+        name: name,
+        address: address,
         surveyorNumber: surveyorNumber || "N/A",
         customerMobile: customerMobile,
         comment: comment,
@@ -172,13 +174,15 @@ export const rejectOrder = async (c) => {
 export const completeOrder = async (c) => {
   try {
     const body = await c.req.json();
-    const { customerMobile, surveyorNumber, receivedAt } = body;
+    const { customerMobile, surveyorNumber, receivedAt,name,address } = body;
 
     return await withDatabase(MONGODB_URI, async (db) => {
       // Safe local insert maintaining standard auditing schemas exclusively
       const adminCompletePayload = {
         surveyorNumber: surveyorNumber || "N/A",
         customerMobile: customerMobile,
+        name: name,
+        address: address,
         time: receivedAt ? new Date(Number(receivedAt)).toISOString() : null
       };
 

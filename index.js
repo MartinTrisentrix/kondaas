@@ -30,6 +30,7 @@ admin.initializeApp({
 });
 
 import locationRoutes from './src/routes/locationRoutes.js';
+import logisticRoutes from './src/routes/logisticRoutes.js';
 import userRoutes from './src/routes/userRoutes.js';
 import orderRoutes from './src/routes/orderRoutes.js';
 import templateRoutes from './src/routes/templateRoutes.js';
@@ -53,6 +54,8 @@ app.route('/solarman', solarmanRoutes);
 app.route('/savings', savingsRoutes);
 app.route('/ticket', ticketRoutes);
 app.route('/referral', referralRoutes);
+app.route('/logistic', logisticRoutes);
+
 
 const port = 8080;
 
