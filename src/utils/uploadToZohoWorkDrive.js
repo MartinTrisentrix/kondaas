@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path'; // 🎯 Added to securely extract standard path strings
 import axios from 'axios';
 import FormData from 'form-data';
 import { withDatabase } from './config.js'; // Adjust path to your config file
@@ -19,11 +20,15 @@ export const uploadToZohoWorkDrive = async (filePath, fileName) => {
       const zAccessToken = await getZohoAccessToken(db);
 
       const form = new FormData();
-      form.append('content', fs.createReadStream(filePath));
-      form.append('parent_id', WORKDRIVE_FOLDER_ID);
-      form.append('override-name-exist', 'true'); 
 
-      console.log(`📡 Pushing ${fileName} securely to Zoho WorkDrive Folder...`);
+      // 🎯 FIX: If fileName is passed, use it. If not, extract the clean filename from filePath automatically!
+      const finalFileName = fileName || path.basename(filePath);
+      
+      form.append('content', fs.createReadStream(filePath), { filename: finalFileName });
+      form.append('parent_id', WORKDRIVE_FOLDER_ID);
+      form.append('override-name-exist', 'true');
+
+      console.log(`📡 Pushing ${finalFileName} securely to Zoho WorkDrive Folder...`);
 
       const response = await axios.post('https://workdrive.zoho.in/api/v1/upload', form, {
         headers: {
@@ -38,8 +43,9 @@ export const uploadToZohoWorkDrive = async (filePath, fileName) => {
       // Pull the actual file resource ID from the true Zoho upload schema properties
       const fileId = resourceData?.id || resourceData?.attributes?.resource_id || resourceData?.attributes?.id;
 
-      // Compile the final shareable permalink or fall back to the direct open route string
-      const workDriveUrl = resourceData?.attributes?.permalink || `https://workdrive.zoho.in/open/file/${fileId}`;
+      // 🎯 FIX: Force the fallback link to use the unauthenticated public direct download endpoint
+      // This allows your message_api container to cleanly fetch the raw file stream for WhatsApp delivery!
+      const workDriveUrl = resourceData?.attributes?.permalink || `https://workdrive.zoho.in/api/v1/download/${fileId}`;
 
       console.log(`✅ File synced to Zoho WorkDrive successfully: ${workDriveUrl}`);
       return workDriveUrl;
@@ -53,14 +59,14 @@ export const uploadToZohoWorkDrive = async (filePath, fileName) => {
 };
 
 /**
- * 📸 NEW STEP: SURVEYOR PHOTO PROCESSOR WRAPPER
+ * 📸 SURVEYOR PHOTO PROCESSOR WRAPPER
  * Takes the file, handles custom phone + date formatting, and uploads it.
  */
 export const uploadSurveyorPhoto = async (filePath, phoneNo, date) => {
   // 1. Sanitize date formatting (replace slashes or backslashes with dashes so it doesn't break directory names)
   const cleanDate = date.replace(/[\/\\]/g, '-');
   
-  // 2. Generate a small timestamp so multiple photos taken on the same day don't overwrite each other
+  // 2. Add a simple timestamp so multiple surveyor images on the same day don't overwrite each other
   const timestamp = Math.floor(Date.now() / 1000);
   
   // 3. Assemble filename string: phoneNo_date_timestamp.jpg

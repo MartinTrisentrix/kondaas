@@ -247,17 +247,23 @@ export const updateSurveyStatus = async (c) => {
 
     // 2. Exact Mapping to Zoho's case-sensitive dropdown configurations
     let zohoValue = null;
+    let localCleanedStatus = null;
 
     if (normalizedStatus === "scheduled") {
       zohoValue = "Scheduled";
+      localCleanedStatus = "scheduled"; 
     } else if (normalizedStatus === "rejected") {
       zohoValue = "Rejected";
+      localCleanedStatus = "rejected";
     } else if (normalizedStatus === "completed") {
       zohoValue = "Completed";
+      localCleanedStatus = "completed";
     } else if (normalizedStatus === "accepted") {
       zohoValue = "Accepted";
+      localCleanedStatus = "accepted";
     } else if (normalizedStatus === "inprogress" || normalizedStatus === "in-progress") {
-      zohoValue = "In-Progress"; // 🎯 Matches your specific capital letters and hyphen!
+      zohoValue = "In-Progress"; 
+      localCleanedStatus = "inprogress"; // 🎯 Stripped down version for your frontend filter schema matrix
     }
 
     // Fallback if the requested value doesn't match your system options
@@ -268,10 +274,10 @@ export const updateSurveyStatus = async (c) => {
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // 🔐 Grab active authorization credentials dynamically from your config / DB
+      // 🔐 Grab active authorization credentials dynamically out of your RAM/Atlas cache
       const zohoToken = await getZohoAccessToken(db);
 
-      // 3. Build the precise payload using the perfectly formatted zohoValue
+      // 3. Build the precise Zoho payload using the perfectly formatted zohoValue
       const zohoPayload = {
         data: [
           {
@@ -283,7 +289,7 @@ export const updateSurveyStatus = async (c) => {
 
       console.log(`📡 Transmitting Targeted Dropdown Update to Zoho CRM Deals for record ID: ${id} -> Value: ${zohoValue}...`);
 
-      // 4. 🚀 FIX: Switched module path from /Leads/ to /Deals/ to target converted profiles
+      // 4. Update Remote Zoho CRM
       const response = await fetch(`https://www.zohoapis.in/crm/v8/Deals/${id}`, {
         method: "PUT",
         headers: {
@@ -302,74 +308,36 @@ export const updateSurveyStatus = async (c) => {
       const result = await response.json();
       console.log("✅ Zoho Server Response Status Payload:", JSON.stringify(result));
 
+      // 5. 🔄 UNIFIED STEP: Sync straight to local MongoDB "deals" collection in the same loop
+      console.log(`🔄 Syncing local status for Deal [${id}] to matching state: ${localCleanedStatus}`);
+      
+      const localResult = await db.collection("deals").updateOne(
+        { deal_id: String(id) }, // Targets your primary deal ID cross reference string
+        { 
+          $set: { 
+            siteSurveyStatus: localCleanedStatus,
+            updatedAt: new Date().toISOString()
+          } 
+        }
+      );
+
+      if (localResult.matchedCount === 0) {
+        console.warn(`⚠️ Remote Zoho target updated, but no matching local record tracked for Deal ID: ${id}`);
+      } else {
+        console.log(`✅ Successfully shifted status locally for Deal [${id}] to pipeline flag: ${localCleanedStatus}`);
+      }
+
       return c.json({ 
         success: true, 
-        message: `Zoho Site Survey Status successfully transitioned to '${zohoValue}' inside Deals module.`,
-        id: id
+        message: `Site Survey Status successfully transitioned to '${zohoValue}' inside both Zoho and local database tracking.`,
+        id: id,
+        currentLocalStatus: localCleanedStatus
       });
     });
 
   } catch (err) {
     console.error("❌ Dropdown Update Exception Error:", err.message);
     return c.json({ error: "Internal server error" }, 500);
-  }
-};
-
-
-export const updateLocalDealSurveyStatus = async (c) => {
-  try {
-    const body = await c.req.json();
-    const { deal_id, siteSurveyStatus } = body;
-
-    // 🛑 Validation: Ensure we have the target deal and the status payload
-    if (!deal_id || !siteSurveyStatus) {
-      return c.json({ error: "Missing required fields: deal_id or siteSurveyStatus" }, 400);
-    }
-
-    // Standardize status format (converts "In Progress" or "in-progress" -> "inprogress")
-    const cleanedStatus = siteSurveyStatus.toLowerCase().replace(/[\s-_]/g, '').trim();
-
-    // Strict validation to keep your frontend status filtering working smoothly
-    const allowedStatuses = ["accepted", "inprogress", "completed"];
-    if (!allowedStatuses.includes(cleanedStatus)) {
-      return c.json({ 
-        error: `Invalid status setup. Must be one of: ${allowedStatuses.join(", ")}` 
-      }, 400);
-    }
-
-    return await withDatabase(MONGODB_URI, async (db) => {
-      
-      console.log(`🔄 Updating local status for Deal [${deal_id}] to matching state: ${cleanedStatus}`);
-
-      // Update document parameters inside your local MongoDB "deals" collection
-      const result = await db.collection("deals").updateOne(
-        { deal_id: deal_id },
-        { 
-          $set: { 
-            siteSurveyStatus: cleanedStatus,
-            updatedAt: new Date().toISOString()
-          } 
-        }
-      );
-
-      if (result.matchedCount === 0) {
-        console.log(`⚠️ No local record found to track for Deal ID: ${deal_id}`);
-        return c.json({ error: "Deal record not found in local tracking matrix." }, 404);
-      }
-
-      console.log(`✅ Successfully shifted status for Deal [${deal_id}] to pipeline flag: ${cleanedStatus}`);
-
-      return c.json({ 
-        success: true, 
-        message: `Site survey stage successfully shifted to ${cleanedStatus}.`,
-        deal_id: deal_id,
-        currentLocalStatus: cleanedStatus
-      }, 200);
-    });
-
-  } catch (err) {
-    console.error("❌ Update Local Survey Status Exception:", err.message);
-    return c.json({ error: "Internal server error updating local pipeline flags" }, 500);
   }
 };
 
