@@ -181,3 +181,31 @@ export const createInstallerProduct = async (c) => {
     return c.json({ error: "Internal server error" }, 500);
   }
 };
+
+export const getLogisticProducts = async (c) => {
+  try {
+    console.log("📡 Fetching comprehensive list of logistic-products from Atlas matrix...");
+
+    return await withDatabase(MONGODB_URI, async (db) => {
+      // 1. Target the specific logistic-products collection
+      const products = await db.collection("logistic-products")
+        .find({})
+        .toArray();
+
+      // 2. Return the data payload with a success status
+      return c.json({
+        success: true,
+        count: products.length,
+        data: products
+      }, 200);
+    });
+
+  } catch (err) {
+    console.error("❌ Exception inside getLogisticProducts controller:", err.message);
+    return c.json({ 
+      success: false, 
+      error: "Internal server error fetching logistics inventory catalog",
+      details: err.message 
+    }, 500);
+  }
+};

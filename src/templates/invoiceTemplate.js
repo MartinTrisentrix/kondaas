@@ -16,13 +16,13 @@ export const getInvoiceTemplate = (lead) => {
 
   // ── 2. Financial & Date Calculations ─────────────────────────────────────
   let totalPlantCost;
-if (lead.panelType && lead.panelType.includes('TopCon')) {
-  totalPlantCost = 200000; // 2 Lakhs - TopCon Bifacial 600–620W
-} else if (lead.panelType && lead.panelType.includes('Mono PERC')) {
-  totalPlantCost = 100000; // 1 Lakh - Mono PERC Half Cut Bifacial 520–550W
-} else {
-  totalPlantCost = parseFloat(lead.plantCost || 0); // fallback
-}
+  if (lead.panelType && lead.panelType.includes('TopCon')) {
+    totalPlantCost = 200000; // 2 Lakhs - TopCon Bifacial 600–620W
+  } else if (lead.panelType && lead.panelType.includes('Mono PERC')) {
+    totalPlantCost = 100000; // 1 Lakh - Mono PERC Half Cut Bifacial 520–550W
+  } else {
+    totalPlantCost = parseFloat(lead.plantCost || 0); // fallback
+  }
   const taxRate = 5; // Fixed 5% GST
   const taxableValue = totalPlantCost / (1 + (taxRate / 100));
   const totalTax = totalPlantCost - taxableValue;
