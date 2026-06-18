@@ -1,6 +1,6 @@
 import { withDatabase, Binary, ObjectId, getSystemKeys } from '../utils/config.js';
 import { generatePDF } from '../utils/pdfGenerator.js';
-import { uploadToZohoWorkDrive,uploadSurveyorPhoto } from '../utils/uploadToZohoWorkDrive.js';
+import { uploadToZohoWorkDrive,uploadSurveyorAttendancePhoto,uploadLeadPhotoToDynamicTree } from '../utils/uploadToZohoWorkDrive.js';
 import { getInvoiceTemplate } from '../templates/invoiceTemplate.js';
 import path from 'path';
 import fs from 'fs';
@@ -170,7 +170,7 @@ export const triggerScenarioNotification = async (c) => {
   }
 };
 
-
+//attendance photo upload handler
 export const handleSurveyorPhotoUpload = async (c) => {
   let temporaryFilePath = null;
 
@@ -180,17 +180,18 @@ export const handleSurveyorPhotoUpload = async (c) => {
     
     const photoFile = body['photo']; // This is a web File object or Blob
     const phoneNo = body['phoneNo'];
-    const date = body['date'];
+    // Date is now optional since Zoho automatically populates it on the dashboard view!
+    
 
-    // 2. Validate parameters
-    if (!photoFile || !phoneNo || !date) {
+    // 2. Validate parameters (Removed strict 'date' check to prevent app crashes)
+    if (!photoFile || !phoneNo) {
       return c.json({
         success: false,
-        message: "Validation Error: Missing required multipart fields: 'photo', 'phoneNo', or 'date'."
+        message: "Validation Error: Missing required multipart fields: 'photo' or 'phoneNo'."
       }, 400);
     }
 
-    console.log(`📸 Processing incoming site photo from Surveyor: ${phoneNo} for date: ${date}...`);
+    console.log(`📸 Processing incoming attendance photo from Surveyor: ${phoneNo}...`);
 
     // 3. Create a clean local uploads directory if it doesn't exist
     const uploadDir = './uploads';
@@ -206,31 +207,95 @@ export const handleSurveyorPhotoUpload = async (c) => {
     temporaryFilePath = path.join(uploadDir, `temp_${Date.now()}_${photoFile.name}`);
     fs.writeFileSync(temporaryFilePath, buffer);
 
-    // 5. Fire your unified Zoho WorkDrive wrapper handler
-    const workDriveUrl = await uploadSurveyorPhoto(temporaryFilePath, phoneNo, date);
+    // 5. 🎯 UPDATE: Fire your brand new dedicated attendance folder wrapper handler!
+    const workDriveUrl = await uploadSurveyorAttendancePhoto(temporaryFilePath, phoneNo, photoFile.name);
 
     // 6. Return successful payload url mapping to the surveyor's mobile application
     return c.json({
       success: true,
-      message: "Photo synced to Zoho WorkDrive successfully.",
+      message: "Attendance photo synced to Zoho WorkDrive attendance folder successfully.",
       url: workDriveUrl
     }, 200);
 
   } catch (error) {
-    console.error("❌ Surveyor Photo Route Pipeline Failed:", error.message);
+    console.error("❌ Surveyor Attendance Photo Route Pipeline Failed:", error.message);
     return c.json({
       success: false,
-      message: "Internal server crash during WorkDrive photo sync operation.",
+      message: "Internal server crash during WorkDrive attendance photo sync operation.",
       error: error.message
     }, 500);
 
   } finally {
     // 7. 🔥 CRITICAL Disk Space Cleanup: Always remove transient workspace asset files
     if (temporaryFilePath && fs.existsSync(temporaryFilePath)) {
-      fs.unlink(temporaryFilePath, (err) => {
-        if (err) console.error("⚠️ Failed to remove temporary upload photo file:", err.message);
-        else console.log(`🗑️ Cleaned up temporary local workspace photo asset: ${temporaryFilePath}`);
-      });
+      try {
+        fs.unlinkSync(temporaryFilePath);
+        console.log(`🗑️ Cleaned up temporary local workspace photo asset: ${temporaryFilePath}`);
+      } catch (err) {
+        console.error("⚠️ Failed to remove temporary upload photo file:", err.message);
+      }
+    }
+  }
+};
+
+//for leads dynamic folder with yyyy-mm-dd date structure in zoho tree layout
+export const handleLeadPhotoUpload = async (c) => {
+  let temporaryFilePath = null;
+
+  try {
+    const body = await c.req.parseBody();
+    
+    const photoFile = body['photo'];   
+    const customerNumber = body['customerNumber']; // 🎯 UPDATE: Read customerNumber from mobile payload boundary
+    const date = body['date'];         
+
+    // 🎯 UPDATE: Validation checks customerNumber instead of dealId
+    if (!photoFile || !customerNumber || !date) {
+      return c.json({
+        success: false,
+        message: "Validation Error: Missing required fields: 'photo', 'customerNumber', or 'date'."
+      }, 400);
+    }
+
+    console.log(`📡 Processing dynamic leads photo upload. Customer Number: ${customerNumber} for Date: ${date}...`);
+
+    const uploadDir = './uploads';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    const arrayBuffer = await photoFile.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    
+    // 🎯 UPDATE: Temporary file path named with customerNumber context
+    temporaryFilePath = path.join(uploadDir, `temp_lead_${customerNumber}_${Date.now()}${path.extname(photoFile.name)}`);
+    fs.writeFileSync(temporaryFilePath, buffer);
+
+    // 🎯 UPDATE: Pass customerNumber into your updated utility wrapper parameters
+    const workDriveUrl = await uploadLeadPhotoToDynamicTree(temporaryFilePath, customerNumber, date, photoFile.name);
+
+    return c.json({
+      success: true,
+      message: "Lead photo organized and synced to Zoho tree layout successfully.",
+      url: workDriveUrl
+    }, 200);
+
+  } catch (error) {
+    console.error("❌ Lead Dynamic Photo Pipeline Failed:", error.message);
+    return c.json({
+      success: false,
+      message: "Internal server crash during dynamic folder upload operations.",
+      error: error.message
+    }, 500);
+
+  } finally {
+    if (temporaryFilePath && fs.existsSync(temporaryFilePath)) {
+      try {
+        fs.unlinkSync(temporaryFilePath);
+        console.log(`🗑️ Cleaned up temporary local workspace lead asset: ${temporaryFilePath}`);
+      } catch (err) {
+        console.error("⚠️ Failed to clean up temporary file:", err.message);
+      }
     }
   }
 };
