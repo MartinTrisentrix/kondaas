@@ -662,6 +662,142 @@ export const assignDealToSurveyor = async (c) => {
 };
 
 
+export const zohoWorkflowAssignment = async (c) => {
+  try {
+    // 1. Gather any query strings and extract the raw body string
+    const urlQueries = c.req.query() || {};
+    let rawText = "";
+    
+    try {
+      rawText = await c.req.text();
+    } catch (e) {
+      // Stream unreadable or empty payload
+    }
+
+    // 2. Parse the text stream directly into form fields
+    let bodyParams = {};
+    if (rawText && rawText.trim().length > 0) {
+      try {
+        bodyParams = Object.fromEntries(new URLSearchParams(rawText.trim()));
+      } catch (e) {
+        // Fallback for exceptional string configurations
+      }
+    }
+
+    // 3. Merge query strings and form parameters into a single dataset
+    const payload = { ...bodyParams, ...urlQueries };
+    
+    // 4. Map incoming fields to clean local variables
+    const id = payload.deal_id || payload.id;
+    const name = payload.deal_name || payload.name;
+    const mobile = payload.mobile || payload.customer_mobile || null;
+    const whatsappNo = payload.whatsappNo || payload.customer_whatsapp || null;
+    const email = payload.email || payload.customer_email || null;
+    const city = payload.city || null;
+    const address = payload.address || null;
+    const latitude = payload.latitude || null;
+    const longitude = payload.longitude || null;
+    const comment = payload.comment || "Assigned via Zoho CRM Automated Field Update";
+    const status = payload.status || "unaccepted";
+    const kilovolt = payload.kilovolt || null;
+    const date = payload.date || null;
+    
+    const siteEngineerContact = payload.site_engineer_contact || payload.Site_Engineer_Contact;
+
+    if (!id || !siteEngineerContact) {
+      return c.json({ error: "Missing required fields: id or site_engineer_contact from Zoho payload" }, 400);
+    }
+
+    // 🧼 Sanitize and normalize phone formatting down to standard digits
+    let surveyorNumber = String(siteEngineerContact).replace(/\D/g, ''); 
+    if (surveyorNumber.length === 12 && surveyorNumber.startsWith('91')) {
+      surveyorNumber = surveyorNumber.substring(2);
+    }
+
+    return await withDatabase(MONGODB_URI, async (db) => {
+      
+      // 🧱 Step 1: Shape the core document structure for local storage
+      const fullDealPayload = {
+        deal_id: id,
+        deal_name: name || "New Site Opportunity",
+        mobile: mobile,
+        whatsappNo: whatsappNo,
+        email: email,
+        city: city,
+        address: address,
+        latitude: latitude,
+        longitude: longitude,
+        comment: comment,
+        status: status,
+        siteSurveyStatus: "notassigned",
+        kilovolt: kilovolt,
+        date: date,
+        assignedTo: surveyorNumber,
+        assignedAt: new Date().toISOString(),
+      };
+
+      // Atomic update-insert operation inside local database
+      await db.collection("deals").updateOne(
+        { deal_id: id },
+        { $set: fullDealPayload },
+        { upsert: true }
+      );
+
+      console.log(`🎯 Zoho Assignment Sync -> Deal: ${id} mapped to Surveyor: ${surveyorNumber}`);
+
+      // 🔍 Step 2: Fetch the assigned surveyor's user details
+      const surveyorProfile = await db.collection("userDetails").findOne({
+        "UserInfo.phoneNo": surveyorNumber,
+        "UserInfo.role": "surveyor"
+      });
+
+      if (!surveyorProfile) {
+        console.log(`⚠️ Surveyor profile missing from database for number: ${surveyorNumber}`);
+        return c.json({ success: true, message: "Deal assigned locally, but surveyor profile missing." }, 200);
+      }
+
+      // 📱 Step 3: Extract valid FCM device registry tokens
+      let surveyorTokens = [];
+      const devices = surveyorProfile.PlatformInfo?.devices;
+      if (devices && Array.isArray(devices)) {
+        devices.forEach((device) => {
+          if (device.fcmToken) {
+            surveyorTokens.push(device.fcmToken);
+          }
+        });
+      }
+
+      // 🚀 Step 4: Dispatch targeted push alerts via Firebase Multicast
+      if (surveyorTokens.length > 0) {
+        const message = {
+          notification: {
+            title: "New Job Assigned! 📋",
+            body: `You have been assigned to site survey: ${fullDealPayload.deal_name}.`,
+          },
+          data: {
+            deal_id: id,
+            click_action: "FLUTTER_NOTIFICATION_CLICK",
+            type: "ASSIGNMENT"
+          },
+          tokens: surveyorTokens,
+        };
+
+        const response = await admin.messaging().sendEachForMulticast(message);
+        console.log(`🚀 Dispatch Notification -> Sent to: ${surveyorNumber} (Success count: ${response.successCount})`);
+      } else {
+        console.log(`⚠️ No active FCM device tokens registered for surveyor: ${surveyorNumber}`);
+      }
+
+      return c.json({ success: true, message: "Deal assignment complete and surveyor notified." }, 200);
+    });
+
+  } catch (err) {
+    console.error("❌ Zoho Assignment Webhook Error:", err.message);
+    return c.json({ error: "Internal server error during Zoho assignment pipeline" }, 500);
+  }
+};
+
+
 export const getSurveyorDeals = async (c) => {
   try {
     // Grab the logged-in surveyor's mobile number sent from their app

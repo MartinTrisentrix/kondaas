@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 
-import { addLocation, getLocationByTime, getCurrentLocation } from '../controllers/locationController.js';
+import { addLocation, getLocationByTime, getCurrentLocation, } from '../controllers/locationController.js';
 
 const locationRoutes = new Hono();
 

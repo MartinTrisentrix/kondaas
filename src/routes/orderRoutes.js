@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { addOrder,rejectOrder,updateOrder,getOrders,getAdminRejections,getAdminCompletions,deleteOrder,completeOrder,updateSurveyStatus,handleZohoDealWebhook,assignDealToSurveyor,getSurveyorDeals } from '../controllers/orderController.js';
+import { addOrder,rejectOrder,updateOrder,getOrders,getAdminRejections,getAdminCompletions,deleteOrder,completeOrder,updateSurveyStatus,handleZohoDealWebhook,assignDealToSurveyor,zohoWorkflowAssignment,getSurveyorDeals } from '../controllers/orderController.js';
 
 const orderRoutes = new Hono();
 
@@ -14,6 +14,7 @@ orderRoutes.delete('/delete', deleteOrder);
 orderRoutes.put('/updatestatus', updateSurveyStatus);
 orderRoutes.post('/webhook', handleZohoDealWebhook);
 orderRoutes.post('/assign', assignDealToSurveyor);
+orderRoutes.post('/zoho-assign', zohoWorkflowAssignment);
 orderRoutes.get('/surveyor', getSurveyorDeals);
 
 

@@ -162,3 +162,50 @@ export const createLogisticsProduct = async (c) => {
     return c.json({ error: "Internal server error" }, 500);
   }
 };
+
+export const updateProductStatus = async (c) => {
+  try {
+    const body = await c.req.json();
+    const { id, status } = body;
+
+    // 1. Basic validation
+    if (!id || !status) {
+      return c.json({ error: "Validation Error: Both 'id' and 'status' are required in the body." }, 400);
+    }
+
+    const allowedStatuses = [ "dropped", "received", "inprogress", "installed"];
+    if (!allowedStatuses.includes(status)) {
+      return c.json({ error: `Validation Error: Invalid status. Must be one of: ${allowedStatuses.join(', ')}` }, 400);
+    }
+
+    // 2. Update directly in MongoDB
+    return await withDatabase(MONGODB_URI, async (db) => {
+      const collection = db.collection("kondaas-products");
+      const { ObjectId } = await import('mongodb');
+
+      const updateResult = await collection.updateOne(
+        { _id: new ObjectId(id) },
+        { 
+          $set: { 
+            status: status
+          } 
+        }
+      );
+
+      if (updateResult.matchedCount === 0) {
+        return c.json({ error: "Product record not found." }, 404);
+      }
+
+      console.log(`🔄 Product ${id} updated to status: ${status}`);
+
+      return c.json({
+        success: true,
+        message: `Product status successfully updated to '${status}'.`
+      }, 200);
+    });
+
+  } catch (err) {
+    console.error("❌ Product Status Update Exception:", err.message);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+};

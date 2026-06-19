@@ -65,22 +65,24 @@ export const uploadToZohoWorkDrive = async (filePath, fileName, targetFolderId) 
  * 📸 NEW: SURVEYOR ATTENDANCE PHOTO WRAPPER
  * 🎯 Handles daily check-ins: names file strictly by mobile number and directs to attendance folder
  */
-export const uploadSurveyorAttendancePhoto = async (filePath, mobileNumber, originalFileName) => {
+export const uploadSurveyorAttendancePhoto = async (filePath, mobileNumber, time, fileExtension) => {
   try {
-    // Grab the exact extension (.jpg, .png, etc.) from the incoming file
-    const fileExtension = path.extname(originalFileName) || '.jpg';
-    
-    // 🎯 RULE: Filename format is mobile number alone as requested by your lead
-    const customZohoName = `${mobileNumber}${fileExtension}`;
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const dateString = `${year}-${month}-${day}`; // "2026-06-19"
 
-    // 🎯 TARGET: Dedicated Attendance folder ID extracted from your shared URL
-    const ATTENDANCE_FOLDER_ID = "f25r5e10f341b80fb410b85392b1c4834328f";
+    // Fetch the target 3-tier Day Folder ID passing both the date and surveyor's phone
+    const targetDayFolderId = await getOrCreateDateFolder(dateString, mobileNumber);
 
-    console.log(`📸 Processing attendance photo. Naming structure: ${customZohoName}`);
+    // 🎯 NEW FILENAME RULE: SI_HH-MM-SS.ext (Dropped mobile from filename since it's now the parent folder)
+    const customZohoName = `SI_${time}${fileExtension}`;
+    console.log(`📸 Target Surveyor Day Folder Resolved. Storing photo as: ${customZohoName}`);
     
-    // Pass the file, custom name, and the specific attendance folder ID straight to the core engine!
-    const uploadedUrl = await uploadToZohoWorkDrive(filePath, customZohoName, ATTENDANCE_FOLDER_ID);
+    const uploadedUrl = await uploadToZohoWorkDrive(filePath, customZohoName, targetDayFolderId);
     return uploadedUrl;
+
   } catch (err) {
     console.error(`❌ Attendance wrapper crashed for surveyor mobile: ${mobileNumber}`, err.message);
     throw err;
@@ -88,48 +90,52 @@ export const uploadSurveyorAttendancePhoto = async (filePath, mobileNumber, orig
 };
 
 
-const getOrCreateDateFolder = async (dateString) => {
-  // 🎯 Master Anchor: Your manual Leads folder ID
-  const LEADS_MASTER_FOLDER_ID = "321624257e8e50b1641688dfc711863900c30";
+//sur-Attendance folder creation
+export const getOrCreateDateFolder = async (dateString, mobileNumber) => {
+  // 🎯 Master Anchor: Your dedicated Attendance root folder ID
+  const ATTENDANCE_FOLDER_ID = "sfoej0bf69353dfa0460c9a2264540039d5d0";
 
   const [year, month, day] = dateString.split('-'); 
   const monthFolderName = `${year}-${month}`; // "2026-06"
-  const dayFolderName = day;                  // "18"
-  const remotePathTree = `${monthFolderName}/${dayFolderName}`;
+  const dayFolderName = day;                  // "19"
+  
+  // Unique database lookup paths scoped exactly to this surveyor phone number
+  const surveyorPathKey = `${mobileNumber}`;
+  const monthPathKey = `${mobileNumber}/${monthFolderName}`;
+  const fullDayPathKey = `${mobileNumber}/${monthFolderName}/${dayFolderName}`;
 
   return await withDatabase(MONGODB_URI, async (db) => {
     const cacheCollection = db.collection("zoho_folders");
 
-    // 🔎 STEP 1: Check MongoDB if today's day folder already exists
+    // 🔎 STEP 1: Check MongoDB if this surveyor's specific day folder already exists
     const cachedDayFolder = await cacheCollection.findOne({ 
       type: "day", 
-      path: remotePathTree 
+      path: fullDayPathKey 
     });
 
     if (cachedDayFolder) {
-      console.log(`📋 MongoDB Notebook Cache Hit! Found Day Folder ID: ${cachedDayFolder.zohoFolderId}`);
+      console.log(`📋 Cache Hit! Found Surveyor Day Folder ID: ${cachedDayFolder.zohoFolderId}`);
       return cachedDayFolder.zohoFolderId;
     }
 
-    console.log(`📝 Cache Miss! First upload for ${remotePathTree}. Resolving tree via Zoho API...`);
+    console.log(`📝 Cache Miss! First upload for path [${fullDayPathKey}]. Resolving tree via Zoho API...`);
     const zAccessToken = await getZohoAccessToken(db);
 
-    // 🔎 STEP 2: Check or Create the Month Folder (YYYY-MM)
-    let monthFolderId;
-    const cachedMonthFolder = await cacheCollection.findOne({ type: "month", name: monthFolderName });
+    // 🔎 STEP 2: Check or Create the Surveyor's Parent Folder inside Attendance Root
+    let surveyorFolderId;
+    const cachedSurveyorFolder = await cacheCollection.findOne({ type: "surveyor", path: surveyorPathKey });
 
-    if (cachedMonthFolder) {
-      monthFolderId = cachedMonthFolder.zohoFolderId;
+    if (cachedSurveyorFolder) {
+      surveyorFolderId = cachedSurveyorFolder.zohoFolderId;
     } else {
-      console.log(`📁 Creating Month Folder "${monthFolderName}" inside Leads Master...`);
+      console.log(`📁 Creating Surveyor Mobile Folder "${mobileNumber}" inside Attendance Root...`);
       
-      // 🎯 MATCHING YOUR CURL EXACTLY: URL endpoint and body payload
-      const monthRes = await axios.post('https://www.zohoapis.in/workdrive/api/v1/files', {
+      const surveyorRes = await axios.post('https://www.zohoapis.in/workdrive/api/v1/files', {
         data: {
           type: "files",
           attributes: {
-            name: monthFolderName,
-            parent_id: LEADS_MASTER_FOLDER_ID
+            name: mobileNumber,
+            parent_id: ATTENDANCE_FOLDER_ID
           }
         }
       }, {
@@ -139,32 +145,67 @@ const getOrCreateDateFolder = async (dateString) => {
         }
       });
 
-      // Added fallback layout matching just in case Zoho puts the id inside attributes
+      surveyorFolderId = surveyorRes.data?.data?.id || surveyorRes.data?.data?.attributes?.id;
+
+      if (!surveyorFolderId) {
+        throw new Error("Failed to extract surveyorFolderId from Zoho response schema.");
+      }
+
+      await cacheCollection.insertOne({
+        type: "surveyor",
+        path: surveyorPathKey,
+        zohoFolderId: surveyorFolderId,
+        createdAt: new Date()
+      });
+    }
+
+    // 🔎 STEP 3: Check or Create the Month Folder (YYYY-MM) inside Surveyor's Mobile Folder
+    let monthFolderId;
+    const cachedMonthFolder = await cacheCollection.findOne({ type: "month", path: monthPathKey });
+
+    if (cachedMonthFolder) {
+      monthFolderId = cachedMonthFolder.zohoFolderId;
+    } else {
+      console.log(`📁 Creating Month Folder "${monthFolderName}" inside Surveyor folder...`);
+      
+      const monthRes = await axios.post('https://www.zohoapis.in/workdrive/api/v1/files', {
+        data: {
+          type: "files",
+          attributes: {
+            name: monthFolderName,
+            parent_id: surveyorFolderId // Nesting inside surveyor folder ID
+          }
+        }
+      }, {
+        headers: { 
+          'Authorization': `Zoho-oauthtoken ${zAccessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
       monthFolderId = monthRes.data?.data?.id || monthRes.data?.data?.attributes?.id;
 
       if (!monthFolderId) {
         throw new Error("Failed to extract monthFolderId from Zoho response schema.");
       }
 
-      // Save month shortcut to MongoDB cache
       await cacheCollection.insertOne({
         type: "month",
-        name: monthFolderName,
+        path: monthPathKey,
         zohoFolderId: monthFolderId,
         createdAt: new Date()
       });
     }
 
-    // 🔎 STEP 3: Create the Day Folder (DD) inside the resolved Month Folder
+  // 🔎 STEP 4: Create the Day Folder (DD) inside the resolved Month Folder
     console.log(`📁 Creating Day Folder "${dayFolderName}" inside Month Folder...`);
     
-    // 🎯 MATCHING YOUR CURL EXACTLY
     const dayRes = await axios.post('https://www.zohoapis.in/workdrive/api/v1/files', {
       data: {
         type: "files",
         attributes: {
           name: dayFolderName,
-          parent_id: monthFolderId
+          parent_id: monthFolderId // Nesting inside month folder ID
         }
       }
     }, {
@@ -174,17 +215,15 @@ const getOrCreateDateFolder = async (dateString) => {
       }
     });
 
-    // Added fallback layout matching here as well
     const dayFolderId = dayRes.data?.data?.id || dayRes.data?.data?.attributes?.id;
 
     if (!dayFolderId) {
       throw new Error("Failed to extract dayFolderId from Zoho response schema.");
     }
 
-    // Save the day shortcut to MongoDB for all future uploads today
     await cacheCollection.insertOne({
       type: "day",
-      path: remotePathTree,
+      path: fullDayPathKey,
       zohoFolderId: dayFolderId,
       createdAt: new Date()
     });
@@ -192,30 +231,129 @@ const getOrCreateDateFolder = async (dateString) => {
     return dayFolderId;
   });
 };
-/**
- * 📸 MAIN BRIDGE WRAPPER: UPLOAD PHOTO TO DYNAMIC LEADS CALENDAR TREE
- */
-export const uploadLeadPhotoToDynamicTree = async (filePath, customerNumber, dateString, originalFileName) => {
-  try {
-    const normalizedDate = dateString.replace(/[\/\\]/g, '-');
 
-    // 1. Resolve or create the nested folder path IDs via our smart uploader helper!
-    const targetFolderId = await getOrCreateDateFolder(normalizedDate);
 
-    const fileExtension = path.extname(originalFileName) || '.jpg';
-    const customZohoName = `${customerNumber}${fileExtension}`;
+//Lead details 
+export const getOrCreateLeadsSEFolder = async (dealId, subfolderType) => {
+  // 🎯 Master Anchor: Double check this matches your Zoho folder properties link!
+  const LEADS_SE_ROOT_ID = "sfoeja4258e75cef24ca7bcc99b036b7610a7";
 
-    console.log(`🚀 Routing file ${customZohoName} into resolved sub-folder ID: ${targetFolderId}`);
+  const dealPathKey = `${dealId}`;
+  const fullSubfolderPathKey = `${dealId}/${subfolderType}`;
 
-    // 2. Hand it directly to your functioning core uploader function!
-    const uploadedUrl = await uploadToZohoWorkDrive(filePath, customZohoName, targetFolderId);
-    return uploadedUrl;
+  return await withDatabase(MONGODB_URI, async (db) => {
+    const cacheCollection = db.collection("zoho_folders");
 
-  } catch (err) {
-    console.error(`❌ Dynamic tree upload pipeline crashed for Customer Number: ${customerNumber}`, err.message);
-    throw err;
-  }
+    // 🔎 STEP 1: Check MongoDB Cache
+    const cachedSubfolder = await cacheCollection.findOne({ 
+      type: "leads_se_subfolder", 
+      path: fullSubfolderPathKey 
+    });
+
+    if (cachedSubfolder) {
+      console.log(`📋 Cache Hit! Found Leads_SE Subfolder [${subfolderType}] ID: ${cachedSubfolder.zohoFolderId}`);
+      return cachedSubfolder.zohoFolderId;
+    }
+
+    console.log(`📝 Cache Miss! First upload for path [${fullSubfolderPathKey}]. Resolving tree via Zoho API...`);
+    const zAccessToken = await getZohoAccessToken(db);
+
+    // 🔎 STEP 2: Check or Create the Deal's Parent Folder
+    let dealFolderId;
+    const cachedDealFolder = await cacheCollection.findOne({ type: "leads_se_deal", path: dealPathKey });
+
+    if (cachedDealFolder) {
+      dealFolderId = cachedDealFolder.zohoFolderId;
+    } else {
+      console.log(`📁 Creating Deal ID Folder "${dealId}" inside Leads_SE Root [${LEADS_SE_ROOT_ID}]...`);
+      
+      try {
+        const dealRes = await axios.post('https://www.zohoapis.in/workdrive/api/v1/files', {
+          data: {
+            type: "files",
+            attributes: {
+              name: String(dealId),
+              parent_id: LEADS_SE_ROOT_ID
+            }
+          }
+        }, {
+          headers: { 
+            'Authorization': `Zoho-oauthtoken ${zAccessToken}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        dealFolderId = dealRes.data?.data?.id || dealRes.data?.data?.attributes?.id;
+
+        if (!dealFolderId) {
+          throw new Error("Failed to extract dealFolderId from Zoho response schema.");
+        }
+
+        await cacheCollection.insertOne({
+          type: "leads_se_deal",
+          path: dealPathKey,
+          zohoFolderId: dealFolderId,
+          createdAt: new Date()
+        });
+
+      } catch (err) {
+        if (err.isAxiosError && err.response) {
+          console.error("❌ Zoho API Refused Folder Creation (Step 2)!");
+          console.error("🔹 Status Code:", err.response.status);
+          console.error("🔹 Error Details:", JSON.stringify(err.response.data, null, 2));
+        }
+        throw err;
+      }
+    }
+
+    // 🔎 STEP 3: Create the requested Subfolder
+    console.log(`📁 Creating Subfolder "${subfolderType}" inside Deal folder [${dealFolderId}]...`);
+    
+    try {
+      const subfolderRes = await axios.post('https://www.zohoapis.in/workdrive/api/v1/files', {
+        data: {
+          type: "files",
+          attributes: {
+            name: subfolderType,
+            parent_id: dealFolderId
+          }
+        }
+      }, {
+        headers: { 
+          'Authorization': `Zoho-oauthtoken ${zAccessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const subfolderFolderId = subfolderRes.data?.data?.id || subfolderRes.data?.data?.attributes?.id;
+
+      if (!subfolderFolderId) {
+        throw new Error(`Failed to extract subfolderFolderId for ${subfolderType} from Zoho response schema.`);
+      }
+
+      await cacheCollection.insertOne({
+        type: "leads_se_subfolder",
+        path: fullSubfolderPathKey,
+        zohoFolderId: subfolderFolderId,
+        createdAt: new Date()
+      });
+
+      return subfolderFolderId;
+
+    } catch (err) {
+      if (err.isAxiosError && err.response) {
+        console.error(`❌ Zoho API Refused Subfolder [${subfolderType}] Creation (Step 3)!`);
+        console.error("🔹 Status Code:", err.response.status);
+        console.error("🔹 Error Details:", JSON.stringify(err.response.data, null, 2));
+      }
+      throw err;
+    }
+  });
 };
+
+
+
+
 
 
 

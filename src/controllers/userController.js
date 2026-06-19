@@ -1,20 +1,18 @@
 import { withDatabase } from '../utils/config.js';
 import fs from 'fs';
 import path from 'path';
-import { uploadToZohoWorkDrive } from '../utils/uploadToZohoWorkDrive.js';
+import { uploadToZohoWorkDrive,getOrCreateLeadsSEFolder } from '../utils/uploadToZohoWorkDrive.js';
 
 const MONGODB_URI = process.env.MONGODB_URI;
 
 
 export const addForm = async (c) => {
-  // Array to track temporary files for guaranteed disk cleanup
   const temporaryFilesToClean = [];
 
   try {
-    // 1. Parse Multipart Form-Data instead of raw JSON
+    // 1. Parse Multipart Form-Data
     const body = await c.req.parseBody({ all: true });
     
-    // Extract metadata text. Handles both flat properties and nested data blocks gracefully
     const dataFields = typeof body.data === 'string' ? JSON.parse(body.data) : body;
     const mobileNumber = dataFields.mobileNumber || dataFields.customerDetails?.mobileNumber;
 
@@ -22,44 +20,74 @@ export const addForm = async (c) => {
       return c.json({ error: "Mobile number is required!" }, 400);
     }
 
-    // 🎯 TARGET RESOLUTION: Extract the Deal ID field for custom file naming structures
+    // 🎯 TARGET RESOLUTION: Extract the raw deal_id string
     const dealId = dataFields.deal_id || dataFields.id || mobileNumber;
 
-    // 2. Extract and Isolate the Image Files from the payload boundary
-    const rawPhotos = body.ebBillPhotos;
-    const photoFiles = Array.isArray(rawPhotos) ? rawPhotos : (rawPhotos ? [rawPhotos] : []);
+    // Isolate both array categories from the incoming body payload
+    const rawEbPhotos = body.ebBillPhotos;
+    const ebFiles = Array.isArray(rawEbPhotos) ? rawEbPhotos : (rawEbPhotos ? [rawEbPhotos] : []);
 
-    const uploadedPhotoUrls = [];
+    const rawSitePhotos = body.sitePhotos; // 👈 Extract site photos array from frontend fields
+    const siteFiles = Array.isArray(rawSitePhotos) ? rawSitePhotos : (rawSitePhotos ? [rawSitePhotos] : []);
 
-    // 3. Loop through each uploaded EB bill photo binary stream
-    for (let i = 0; i < photoFiles.length; i++) {
-      const file = photoFiles[i];
+    const uploadDir = path.join(process.cwd(), 'uploads');
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-      // Validate that it's a valid file stream object
-      if (file && file.name) {
-        // Create a unique temporary file path on your server disk space
-        const tempDir = path.join(process.cwd(), 'uploads');
-        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+    // -------------------------------------------------------------------------
+    // PROCESS CATEGORY 1: last 6 month EBbill
+    // -------------------------------------------------------------------------
+    const uploadedEbUrls = [];
+    if (ebFiles.length > 0) {
+      // 🔍 Resolve or create the 3-tier folder structure: Leads_SE -> dealId -> last 6 month EBbill
+      const targetEbFolderId = await getOrCreateLeadsSEFolder(dealId, "last 6 month EBbill");
 
-        const tempFilePath = path.join(tempDir, `temp_eb_${dealId}_${i}_${Date.now()}${path.extname(file.name)}`);
-        temporaryFilesToClean.push(tempFilePath);
+      for (let i = 0; i < ebFiles.length; i++) {
+        const file = ebFiles[i];
+        if (file && file.name) {
+          const ext = path.extname(file.name) || '.jpg';
+          const tempPath = path.join(uploadDir, `temp_eb_${dealId}_${i}_${Date.now()}${ext}`);
+          temporaryFilesToClean.push(tempPath);
 
-        // Stream the incoming binary array buffer down to our temporary file slot
-        const arrayBuffer = await file.arrayBuffer();
-        fs.writeFileSync(tempFilePath, Buffer.from(arrayBuffer));
+          fs.writeFileSync(tempPath, Buffer.from(await file.arrayBuffer()));
 
-        // 🎯 FIX: Formats naming configuration layout to match lead specs: e.g., 923194000004459074-ebslot 1.jpg
-        const customZohoName = `${dealId}-ebslot ${i + 1}${path.extname(file.name)}`;
+          // 🎯 STICK NAMING CONFIG: eb bill 1.jpg, eb bill 2.jpg...
+          const customFileName = `eb bill ${i + 1}${ext}`;
+          console.log(`📸 Streaming EB Bill [${i + 1}/${ebFiles.length}] as: ${customFileName}`);
 
-        console.log(`📸 Forwarding EB Bill File [${i + 1}/${photoFiles.length}] named as: ${customZohoName} to Zoho engine...`);
-        
-        // Push straight up to your existing WorkDrive utility function!
-        const publicUrl = await uploadToZohoWorkDrive(tempFilePath, customZohoName);
-        uploadedPhotoUrls.push(publicUrl);
+          const url = await uploadToZohoWorkDrive(tempPath, customFileName, targetEbFolderId);
+          uploadedEbUrls.push(url);
+        }
       }
     }
 
-    // 4. Save everything neatly into MongoDB Atlas
+    // -------------------------------------------------------------------------
+    // PROCESS CATEGORY 2: site photos
+    // -------------------------------------------------------------------------
+    const uploadedSiteUrls = [];
+    if (siteFiles.length > 0) {
+      // 🔍 Resolve or create the 3-tier folder structure: Leads_SE -> dealId -> site photos
+      const targetSiteFolderId = await getOrCreateLeadsSEFolder(dealId, "site photos");
+
+      for (let i = 0; i < siteFiles.length; i++) {
+        const file = siteFiles[i];
+        if (file && file.name) {
+          const ext = path.extname(file.name) || '.jpg';
+          const tempPath = path.join(uploadDir, `temp_site_${dealId}_${i}_${Date.now()}${ext}`);
+          temporaryFilesToClean.push(tempPath);
+
+          fs.writeFileSync(tempPath, Buffer.from(await file.arrayBuffer()));
+
+          // 🎯 STICK NAMING CONFIG: 1.jpg, 2.jpg, 3.jpg...
+          const customFileName = `${i + 1}${ext}`;
+          console.log(`📸 Streaming Site Photo [${i + 1}/${siteFiles.length}] as: ${customFileName}`);
+
+          const url = await uploadToZohoWorkDrive(tempPath, customFileName, targetSiteFolderId);
+          uploadedSiteUrls.push(url);
+        }
+      }
+    }
+
+    // 2. Save everything neatly into MongoDB Atlas
     return await withDatabase(MONGODB_URI, async (db) => {
       const existing = await db.collection("forms").findOne({ mobileNumber });
       
@@ -67,25 +95,28 @@ export const addForm = async (c) => {
         return c.json({ error: "Mobile number already registered!" }, 400);
       }
 
-      // Combine text fields + your brand new Zoho downloadable links array
       const finalDocument = {
         mobileNumber,
         ...dataFields,
-        ebBillPhotos: uploadedPhotoUrls, // Keeps links tracking alive in background metrics records
+        ebBillPhotos: uploadedEbUrls,  // Array of live Zoho download links
+        sitePhotos: uploadedSiteUrls,  // Array of live Zoho download links
         createdAt: new Date().toISOString()
       };
 
       await db.collection("forms").insertOne(finalDocument);
-      console.log(`✅ Form and ${uploadedPhotoUrls.length} EB bill links successfully synced to Atlas!`);
+      console.log(`✅ Form completely matched and stored to MongoDB Atlas!`);
 
-      return c.json({ message: "Form submitted successfully with EB bill photos!" }, 201);
+      return c.json({ 
+        success: true, 
+        message: "Form submitted successfully. Documents sorted and backed up to Zoho WorkDrive!" 
+      }, 201);
     });
 
   } catch (err) {
     console.error("❌ Exception inside multipart addForm controller:", err.message);
     return c.json({ error: err.message }, 500);
   } finally {
-    // 5. 🛡️ Bulletproof Cleanup Loop: Wipes all short-lived temp files from your local environment disk
+    // 3. Disk Space Cleanup Loop
     for (const filePath of temporaryFilesToClean) {
       if (fs.existsSync(filePath)) {
         try {
