@@ -232,98 +232,6 @@ export const getAdminCompletions = async (c) => {
   }
 };
 
-export const updateOrder = async (c) => {
-  try {
-    const body = await c.req.json();
-
-    // 🛑 Strict Business Rule: Explicit Zoho 'id' string is mandatory to target the right deal record
-    if (!body.id) {
-      return c.json({ error: "Validation Error: A specific Zoho 'id' field is required to update an order." }, 400);
-    }
-
-    const targetZohoId = body.id;
-
-    return await withDatabase(MONGODB_URI, async (db) => {
-      // 🔐 Grab active authorization credentials dynamically
-      const zohoToken = await getZohoAccessToken(db);
-
-      // 🛠️ Build the dynamic fields payload for Zoho CRM
-      const dealUpdateFields = {
-        id: targetZohoId
-      };
-
-      // 💾 Build a separate payload for MongoDB update tracking
-      const mongoUpdateFields = {};
-
-      // Loop through all data fields passed from the frontend and map them 1-to-1
-      for (const [key, value] of Object.entries(body)) {
-        // Exclude 'id' and any invalid empty properties
-        if (key !== 'id' && value !== undefined && value !== null) {
-          dealUpdateFields[key] = value;
-          mongoUpdateFields[key] = value; // Keep local db identical
-        }
-      }
-
-      // 📦 Build the dynamic structured payload matching Zoho API specifications
-      const zohoPayload = {
-        data: [dealUpdateFields]
-      };
-
-      console.log(`📡 Forwarding ordinary form update to Zoho CRM Deals Module for Record ID: ${targetZohoId}`);
-
-      // --- STEP 1: UPDATE ZOHO CRM ---
-      const response = await fetch(`https://www.zohoapis.in/crm/v8/Deals/${targetZohoId}`, {
-        method: "PUT",
-        headers: {
-          "Authorization": `Zoho-oauthtoken ${zohoToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(zohoPayload)
-      });
-
-      if (!response.ok) {
-        const errDetails = await response.text();
-        console.error("❌ Zoho Modification Blocked:", errDetails);
-        return c.json({ error: "Failed to update record inside Zoho CRM Deals module.", details: errDetails }, 500);
-      }
-
-      const resJson = await response.json();
-
-      // Double check internal action status
-      if (resJson?.data?.[0]?.status === "error") {
-        console.error("❌ Zoho internal rejection:", JSON.stringify(resJson));
-        return c.json({ error: "Zoho CRM rejected the payload properties.", details: resJson.data[0] }, 400);
-      }
-
-      // --- STEP 2: UPDATE LOCAL MONGODB ---
-      // Only proceed with database writing if the master record in Zoho updated successfully.
-      if (Object.keys(mongoUpdateFields).length > 0) {
-        console.log(`💾 Mirroring data update to local database for Deal ID: ${targetZohoId}`);
-
-        await db.collection("forms").updateOne(
-          { deal_id: targetZohoId }, // Finds the matching client form based on the linked Zoho Deal ID
-          {
-            $set: {
-              ...mongoUpdateFields,
-              updatedAt: new Date() // Appends a tracking timestamp
-            }
-          },
-          { upsert: false } // Change to true if you want to create a form if it somehow doesn't exist
-        );
-      }
-
-      return c.json({
-        success: true,
-        message: "Targeted Deal profile synchronized cleanly in both Zoho CRM and Database!",
-        id: targetZohoId
-      });
-    });
-  } catch (err) {
-    console.error("❌ UpdateOrder Error Exception:", err.message);
-    return c.json({ error: "Internal server error", details: err.message }, 500);
-  }
-};
-
 export const updateSurveyStatus = async (c) => {
   try {
     const body = await c.req.json();
@@ -470,7 +378,7 @@ export const getOrders = async (c) => {
         return {
           id: deal.id,
           name: deal.Deal_Name || (deal.Contact_Name ? deal.Contact_Name.name : "Unknown Customer"),
-          mobile: deal.Mobile || null,
+          mobile: deal.Mobile || deal.Contact_Number || null,
           whatsappNo: deal.WhatsApp_Number || null,
           email: deal.Email || null,
 
@@ -675,8 +583,8 @@ export const assignDealToSurveyor = async (c) => {
       surveyorNumber
     } = body;
 
-    if (!id || !surveyorNumber) {
-      return c.json({ error: "Missing required fields: id (deal_id) or surveyorNumber" }, 400);
+    if (!id || !surveyorNumber || !mobile) {
+      return c.json({ error: "Missing required fields: id (deal_id), surveyorNumber, or mobile" }, 400);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {

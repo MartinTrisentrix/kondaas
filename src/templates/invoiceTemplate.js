@@ -16,12 +16,12 @@ export const getInvoiceTemplate = (lead) => {
 
   // ── 2. Financial & Date Calculations ─────────────────────────────────────
   let totalPlantCost;
-  if (lead.panelType && lead.panelType.includes('TopCon')) {
+  if (lead.Solar_Panel_Model && lead.Solar_Panel_Model.includes('TopCon')) {
     totalPlantCost = 200000; // 2 Lakhs - TopCon Bifacial 600–620W
-  } else if (lead.panelType && lead.panelType.includes('Mono PERC')) {
+  } else if (lead.Solar_Panel_Model && lead.Solar_Panel_Model.includes('Mono PERC')) {
     totalPlantCost = 100000; // 1 Lakh - Mono PERC Half Cut Bifacial 520–550W
   } else {
-    totalPlantCost = parseFloat(lead.plantCost || 0); // fallback
+    totalPlantCost = parseFloat(lead.Total_Plant_Cost || 0); // fallback
   }
   const taxRate = 5; // Fixed 5% GST
   const taxableValue = totalPlantCost / (1 + (taxRate / 100));
@@ -33,13 +33,13 @@ export const getInvoiceTemplate = (lead) => {
   // Payment Due Date: 2 days after today
   const dueDate = new Date();
   dueDate.setDate(dueDate.getDate() + 2);
-  const formattedDueDate = dueDate.toLocaleDateString('en-IN');
+  const formattedDueDate = lead.Due_Date || dueDate.toLocaleDateString('en-IN');
 
   // ── 3. Render Item Row (Synthesized from Technical Specs) ───────────────
   const itemDescription = `
-    Solar PV Power Plant Installation: ${lead.registeredCapacity || 'N/A'} kWp 
-    (${lead.panelType || 'Standard'} Panels x ${lead.numPanels || 0} Nos) 
-    Inverter: ${lead.inverterCapacity || 'N/A'}
+    Solar PV Power Plant Installation: ${lead.Inverter_Capacity || 'N/A'} kWp 
+    (${lead.Solar_Panel_Brand || 'Standard'} Panels x ${lead.No_of_Panels || 0} Nos) 
+    Inverter: ${lead.Inverter_Brand || 'N/A'} ${lead.Inverter_Capacity || 'N/A'}
   `.trim();
 
   const itemRows = `
@@ -47,7 +47,7 @@ export const getInvoiceTemplate = (lead) => {
       <td style="text-align:center">1</td>
       <td>
         <strong>${itemDescription}</strong><br>
-        <small style="color:#555;">Structure: ${lead.structureType || 'N/A'} | Roof: ${lead.roofType || 'N/A'}</small>
+        <small style="color:#555;">Structure: ${lead.Structure_Type || 'N/A'} | Roof: ${lead.Roof_Type || 'N/A'}</small>
       </td>
       <td style="text-align:center">8541</td>
       <td style="text-align:center">5%</td>
@@ -105,26 +105,26 @@ export const getInvoiceTemplate = (lead) => {
       <div class="box-title">Billing Address</div>
       <div class="field">
         <strong>V.S.CHANDRASEKARAN</strong><br>
-             No;32 , Subramaniam Road ,,  Rs Puram, , Coimbatore,  Tamil Nadu, 641002  India<br>
+        No;32 , Subramaniam Road ,, Rs Puram, , Coimbatore, Tamil Nadu, 641002 India<br>
         Mobile: 9940673850
       </div>
     </div>
     <div class="box">
       <div class="box-title">Delivery Address</div>
       <div class="field">
-        <strong>${lead.consumerName || 'N/A'}</strong><br>
-        ${lead.consumerAddress || 'N/A'}<br>
-        Mobile: ${lead.mobileNumber || 'N/A'}
+        <strong>${lead.Consumer_Name || 'N/A'}</strong><br>
+        ${lead.Street_Address || 'N/A'}, ${lead.City || 'N/A'}, ${lead.State_Province || 'N/A'} - ${lead.Zip_Postal_Code || ''}<br>
+        Mobile: ${lead.Mobile || 'N/A'}
       </div>
     </div>
     <div class="box">
       <div class="box-title">Invoice Details</div>
-      <div class="kv"><span class="kv-label">Consumer No</span> <span>${lead.consumerNumber || 'N/A'}</span></div>
-      <div class="kv"><span class="kv-label">Invoice No</span> <span>${lead.invoiceNo || 'PENDING'}</span></div>
-      <div class="kv"><span class="kv-label">Invoice Date</span> <span>${lead.invoiceDate || new Date().toLocaleDateString('en-IN')}</span></div>
+      <div class="kv"><span class="kv-label">Consumer No</span> <span>${lead.Consumer_Number || 'N/A'}</span></div>
+      <div class="kv"><span class="kv-label">Invoice No</span> <span>${lead.Report_Number || 'PENDING'}</span></div>
+      <div class="kv"><span class="kv-label">Invoice Date</span> <span>${lead.Site_Survey_Requested_Date_Time || new Date().toLocaleDateString('en-IN')}</span></div>
       <div class="kv"><span class="kv-label">Due Date</span> <span>${formattedDueDate}</span></div>
-      <div class="kv"><span class="kv-label">Surveyor</span> <span>${lead.siteSurveyorName || 'N/A'}</span></div>
-      <div class="kv"><span class="kv-label">Surveyor Mobile</span> <span>${lead.sigDeveloperMobile || 'N/A'}</span></div>
+      <div class="kv"><span class="kv-label">Surveyor</span> <span>${lead.Assigned_To || 'N/A'}</span></div>
+      <div class="kv"><span class="kv-label">Surveyor Contact</span> <span>${lead.Site_Engineer_Contact || 'N/A'}</span></div>
     </div>
   </div>
 
@@ -178,25 +178,21 @@ export const getInvoiceTemplate = (lead) => {
 
 // RAW survey form data 
 export const getSurveyReportTemplate = (formData) => {
-  // Safe Fallbacks for fields to ensure nothing prints as undefined
   const d = formData || {};
   
-  // Format dates cleanly
   const currentYear = new Date().getFullYear();
-  const displayDate = d.date ? d.date : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-  const displayTime = d.time || new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const displayDate = d.Site_Survey_Requested_Date_Time ? new Date(d.Site_Survey_Requested_Date_Time).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  const displayTime = d.Site_Survey_Requested_Date_Time ? new Date(d.Site_Survey_Requested_Date_Time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
   
-  // Generate a mock report number matching client format based on DB id or fallback
-  const reportNumber = d.deal_id ? `KON-SRV-${currentYear}-${String(d.deal_id).slice(-4).toUpperCase()}` : `KON-SRV-${currentYear}-TEMP`;
+  const reportNumber = d.Report_Number ? d.Report_Number : (d.deal_id ? `KON-SRV-${currentYear}-${String(d.deal_id).slice(-4).toUpperCase()}` : `KON-SRV-${currentYear}-TEMP`);
 
-  // Helper function to color code badges for "Collected" / "Yes" status
   const getStatusBadge = (val) => {
     const cleanStr = String(val || '').trim().toLowerCase();
-    if (cleanStr === 'collected' || cleanStr === 'yes' || cleanStr === 'required') {
-      return `<span style="background-color: #e6f4ea; color: #137333; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 11px;">${val}</span>`;
+    if (cleanStr === 'collected' || cleanStr === 'yes' || cleanStr === 'required' || val === true) {
+      return `<span style="background-color: #e6f4ea; color: #137333; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 11px;">${val === true ? 'Yes' : val}</span>`;
     }
-    if (cleanStr === 'not collected' || cleanStr === 'no' || cleanStr === 'not required') {
-      return `<span style="background-color: #fce8e6; color: #c5221f; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 11px;">${val}</span>`;
+    if (cleanStr === 'not collected' || cleanStr === 'no' || cleanStr === 'not required' || val === false) {
+      return `<span style="background-color: #fce8e6; color: #c5221f; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 11px;">${val === false ? 'No' : val}</span>`;
     }
     return val || 'N/A';
   };
@@ -221,13 +217,11 @@ export const getSurveyReportTemplate = (formData) => {
         line-height: 1.4;
         background-color: #fff;
       }
-      
-      /* Header Branded Section */
       .header-container {
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
-        border-bottom: 3px solid #e31e24; /* Kondaas Red Accent */
+        border-bottom: 3px solid #e31e24;
         padding-bottom: 10px;
         margin-bottom: 20px;
       }
@@ -253,8 +247,6 @@ export const getSurveyReportTemplate = (formData) => {
         text-align: right;
         margin-top: 5px;
       }
-
-      /* Station Metadata Tracker Grid */
       .meta-tracker-table {
         width: 100%;
         border-collapse: collapse;
@@ -278,8 +270,6 @@ export const getSurveyReportTemplate = (formData) => {
         color: #2c3e50;
         background-color: #f8f9fa;
       }
-
-      /* Section Layout Styling */
       .section-block {
         margin-bottom: 20px;
         page-break-inside: avoid;
@@ -295,8 +285,6 @@ export const getSurveyReportTemplate = (formData) => {
         text-transform: uppercase;
         letter-spacing: 0.5px;
       }
-
-      /* Dynamic Standard Core Grid Base */
       .data-table {
         width: 100%;
         border-collapse: collapse;
@@ -317,8 +305,6 @@ export const getSurveyReportTemplate = (formData) => {
         color: #202124;
         width: 25%;
       }
-
-      /* Document Checklist Special Grids */
       .checklist-table {
         width: 100%;
         border-collapse: collapse;
@@ -332,8 +318,6 @@ export const getSurveyReportTemplate = (formData) => {
         color: #444;
         background-color: #fafafa;
       }
-
-      /* Pricing Total Callout Blocks */
       .pricing-highlight {
         background-color: #f8f9fa;
         border: 1px solid #dadce0;
@@ -355,8 +339,6 @@ export const getSurveyReportTemplate = (formData) => {
         font-weight: bold;
         color: #e31e24;
       }
-
-      /* Signature Board Matrix */
       .signature-container {
         display: flex;
         justify-content: space-between;
@@ -372,7 +354,7 @@ export const getSurveyReportTemplate = (formData) => {
         color: #5f6368;
       }
       .sig-space {
-        height: 40px;
+        height: 60px;
         font-family: 'Courier New', Courier, monospace;
         font-style: italic;
         font-size: 16px;
@@ -381,8 +363,6 @@ export const getSurveyReportTemplate = (formData) => {
         align-items: center;
         justify-content: center;
       }
-
-      /* Footer Layout Markers */
       .footer-note {
         text-align: center;
         font-size: 10px;
@@ -420,7 +400,7 @@ export const getSurveyReportTemplate = (formData) => {
           <td>${reportNumber}</td>
           <td>${displayDate}</td>
           <td>${displayTime}</td>
-          <td><a href="${d.googleMapLink || '#'}" style="color: #1a73e8; text-decoration: none;">Click to View Map</a></td>
+          <td><a href="${d.Google_Map_Location || '#'}" style="color: #1a73e8; text-decoration: none;">Click to View Map</a></td>
         </tr>
       </tbody>
     </table>
@@ -430,26 +410,26 @@ export const getSurveyReportTemplate = (formData) => {
       <table class="data-table">
         <tr>
           <td class="label">Customer Name</td>
-          <td class="value">${d.clientName || 'N/A'}</td>
+          <td class="value">${d.Consumer_Name || 'N/A'}</td>
           <td class="label">Site Engineer</td>
-          <td class="value">${d.engineerName || 'N/A'}</td>
+          <td class="value">${d.Assigned_To || 'N/A'}</td>
         </tr>
         <tr>
           <td class="label">Customer Contact</td>
-          <td class="value">${d.clientContact || 'N/A'}</td>
+          <td class="value">${d.Mobile || 'N/A'}</td>
           <td class="label">Engineer Contact</td>
-          <td class="value">${d.engineerContact || 'N/A'}</td>
+          <td class="value">${d.Site_Engineer_Contact || 'N/A'}</td>
         </tr>
         <tr>
           <td class="label">Site Coordinates</td>
           <td class="value" colspan="3">
-            Lat: ${d.latitude || 'N/A'}, Lng: ${d.longitude || 'N/A'} 
-            ${d.gpsAccuracy ? `(Accuracy: ${d.gpsAccuracy}m)` : ''}
+            Lat: ${d.Latitude || 'N/A'}, Lng: ${d.Longitude || 'N/A'} 
+            ${d.GPS_Accuracy ? `(Accuracy: ${d.GPS_Accuracy}m)` : ''}
           </td>
         </tr>
         <tr>
           <td class="label">Site Address</td>
-          <td class="value" colspan="3">${d.siteAddress || 'N/A'}</td>
+          <td class="value" colspan="3">${d.Street_Address || 'N/A'}, ${d.City || 'N/A'}, ${d.State_Province || 'N/A'}</td>
         </tr>
       </table>
     </div>
@@ -459,14 +439,14 @@ export const getSurveyReportTemplate = (formData) => {
       <table class="data-table">
         <tr>
           <td class="label">Order Type</td>
-          <td class="value">${d.orderType || 'N/A'}</td>
+          <td class="value">${d.Order_Type || 'N/A'}</td>
           <td class="label">Project Type</td>
-          <td class="value">${d.projectType || 'N/A'}</td>
+          <td class="value">${d.Project_Type || 'N/A'}</td>
         </tr>
-        ${d.telecallerName ? `
+        ${d.Created_By ? `
         <tr>
-          <td class="label">Telecaller Name</td>
-          <td class="value" colspan="3">${d.telecallerName}</td>
+          <td class="label">Generated By</td>
+          <td class="value" colspan="3">${d.Created_By}</td>
         </tr>` : ''}
       </table>
     </div>
@@ -476,27 +456,27 @@ export const getSurveyReportTemplate = (formData) => {
       <table class="data-table">
         <tr>
           <td class="label">Consumer Number</td>
-          <td class="value">${d.consumerNumber || 'N/A'}</td>
+          <td class="value">${d.Consumer_Number || 'N/A'}</td>
           <td class="label">Consumer Name</td>
-          <td class="value">${d.consumerName || 'N/A'}</td>
+          <td class="value">${d.Consumer_Name || 'N/A'}</td>
         </tr>
         <tr>
           <td class="label">Connection Status</td>
-          <td class="value">${d.connectionStatus || 'N/A'}</td>
+          <td class="value">${d.Billing_Status || 'N/A'}</td>
           <td class="label">Tariff Type</td>
-          <td class="value">${d.tariffType || 'N/A'}</td>
+          <td class="value">${d.Tariff || 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">Connection Phase</td>
-          <td class="value">${d.connectionPhase || 'N/A'}</td>
+          <td class="label">Connection Type</td>
+          <td class="value">${d.Connection_Type || 'N/A'}</td>
           <td class="label">Connected Load</td>
-          <td class="value">${d.connectedLoad ? d.connectedLoad + ' kW' : 'N/A'}</td>
+          <td class="value">${d.Connected_Load ? d.Connected_Load + ' kW' : 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">KSEB Conn Under Contact?</td>
-          <td class="value">${getStatusBadge(d.ksebConnectionUnderContactPerson)}</td>
+          <td class="label">Name Change Required?</td>
+          <td class="value">${getStatusBadge(d.Name_Change_In_EB_Bill)}</td>
           <td class="label">Transformer Capacity</td>
-          <td class="value">${d.balanceTransformerCapacity || 'N/A'}</td>
+          <td class="value">${d.Balance_Transformer_Capacity || 'N/A'}</td>
         </tr>
       </table>
     </div>
@@ -506,19 +486,19 @@ export const getSurveyReportTemplate = (formData) => {
       <table class="data-table">
         <tr>
           <td class="label">Inverter Type</td>
-          <td class="value">${d.inverterType || 'N/A'}</td>
+          <td class="value">${d.Inverter_Brand || 'N/A'}</td>
           <td class="label">Inv. Connection</td>
-          <td class="value">${d.inverterConnectionType || 'N/A'}</td>
+          <td class="value">${d.Inverter_Connection_Type || 'N/A'}</td>
         </tr>
         <tr>
           <td class="label">Inverter Capacity</td>
-          <td class="value">${d.inverterCapacity ? d.inverterCapacity + ' kW' : 'N/A'}</td>
+          <td class="value">${d.Inverter_Capacity ? d.Inverter_Capacity + ' kW' : 'N/A'}</td>
           <td class="label">Solar Panel Type</td>
-          <td class="value">${d.panelType || 'N/A'}</td>
+          <td class="value">${d.Solar_Panel_Model || 'N/A'}</td>
         </tr>
         <tr>
           <td class="label">Number of Panels</td>
-          <td class="value" colspan="3">${d.numberOfPanels ? d.numberOfPanels + ' Qty' : 'N/A'}</td>
+          <td class="value" colspan="3">${d.No_of_Panels ? d.No_of_Panels + ' Qty' : 'N/A'}</td>
         </tr>
       </table>
     </div>
@@ -528,37 +508,37 @@ export const getSurveyReportTemplate = (formData) => {
       <table class="data-table">
         <tr>
           <td class="label">North to South Space</td>
-          <td class="value">${d.spaceNorthSouth ? d.spaceNorthSouth + ' meters' : 'N/A'}</td>
-          <td class="label">East to West Space</td>
-          <td class="value">${d.spaceEastWest ? d.spaceEastWest + ' meters' : 'N/A'}</td>
+          <td class="value">${d.North_to_South_Space_Available_in_meters ? d.North_to_South_Space_Available_in_meters + ' meters' : 'N/A'}</td>
+          <td class="label">West to East Space</td>
+          <td class="value">${d.West_to_East_Space_Available_meters ? d.West_to_East_Space_Available_meters + ' meters' : 'N/A'}</td>
         </tr>
         <tr>
           <td class="label">Structure Type</td>
-          <td class="value">${d.structureType || 'N/A'}</td>
+          <td class="value">${d.Structure_Type || 'N/A'}</td>
           <td class="label">Roof Type</td>
-          <td class="value">${d.roofType || 'N/A'}</td>
+          <td class="value">${d.Roof_Type || 'N/A'}</td>
         </tr>
         <tr>
           <td class="label">Roof Condition</td>
-          <td class="value">${d.roofCondition || 'N/A'}</td>
+          <td class="value">${d.Roof_Surface_Physical_Condition || 'N/A'}</td>
           <td class="label">Building Height Profile</td>
-          <td class="value">${d.buildingHeight || 'N/A'}</td>
+          <td class="value">${d.Building_Height_Profile || 'N/A'}</td>
         </tr>
         <tr>
           <td class="label">Shadow Possibility</td>
-          <td class="value">${getStatusBadge(d.shadowPossibility)}</td>
+          <td class="value">${getStatusBadge(d.Shadow_Possibility)}</td>
           <td class="label">Roof Access Available?</td>
-          <td class="value">${getStatusBadge(d.roofAccess)}</td>
+          <td class="value">${getStatusBadge(d.Roof_Access_Available)}</td>
         </tr>
         <tr>
           <td class="label">Ladder Requirement</td>
-          <td class="value">${getStatusBadge(d.ladderRequirement)}</td>
+          <td class="value">${getStatusBadge(d.Ladder)}</td>
           <td class="label">Safety Walkway Req.</td>
-          <td class="value">${getStatusBadge(d.walkwayRequirement)}</td>
+          <td class="value">${getStatusBadge(d.Walkway)}</td>
         </tr>
         <tr>
           <td class="label">Sliding Door Setup</td>
-          <td class="value" colspan="3">${getStatusBadge(d.slidingDoorRequirement)}</td>
+          <td class="value" colspan="3">${getStatusBadge(d.Sliding_Door)}</td>
         </tr>
       </table>
     </div>
@@ -566,9 +546,9 @@ export const getSurveyReportTemplate = (formData) => {
     <div class="section-block">
       <div class="section-title">6. Detailed Cabling Feasibility Structure</div>
       <div style="border: 1px solid #e0e0e0; padding: 10px; background-color: #fdfdfd;">
-        <strong>Cable Scope Assignment:</strong> ${d.cableRequirement || 'Standard BOM Cables Only'}<br>
+        <strong>Cable Scope Assignment:</strong> ${d.Cable_Requirements || 'Standard BOM Cables Only'}<br>
         <span style="color: #666; font-size: 11px; margin-top: 4px; display: inline-block;">
-          The site cabling system has been routed according to engineering standards. Any additional cabling variants required beyond standard parameters will layout dynamically during installation.
+          DC Cable Spec: ${d.DC_Cable || 'N/A'} | AC Cable Spec: ${d.AC_Cable || 'N/A'} | Earthing: ${d.Earthing_Cable || 'N/A'}
         </span>
       </div>
     </div>
@@ -578,63 +558,39 @@ export const getSurveyReportTemplate = (formData) => {
       <table class="data-table">
         <tr>
           <td class="label">Customer Docs Checked</td>
-          <td class="value">${d.customerDocsProvided || 'N/A'}</td>
-          <td class="label">Documents Status</td>
-          <td class="value">${d.documentsCollectedStatus || 'N/A'}</td>
+          <td class="value">${d.Document_collected || 'N/A'}</td>
+          <td class="label">EB Documentation Status</td>
+          <td class="value">${d.EB_Documentation_Status || 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">Collected Site Photos</td>
-          <td class="value">${getStatusBadge(d.collectedSitePhotosStatus)}</td>
+          <td class="label">Shadow Informed to Customer?</td>
+          <td class="value">${getStatusBadge(d.Consumer_Informed_About_Shadow_Possibility)}</td>
           <td class="label">EB Bill Name Change?</td>
-          <td class="value">${getStatusBadge(d.ksebNameChange)}</td>
+          <td class="value">${getStatusBadge(d.Address_Update_In_EB_Bill)}</td>
         </tr>
         <tr>
           <td class="label">Bank Name Correction?</td>
-          <td class="value">${getStatusBadge(d.bankNameChange)}</td>
-          <td class="label">KSEB Connected Load Change?</td>
-          <td class="value">${getStatusBadge(d.gridLoadChange)}</td>
+          <td class="value">${getStatusBadge(d.Name_Change_in_Bank)}</td>
+          <td class="label">Connected Load Change?</td>
+          <td class="value">${getStatusBadge(d.Tariff_Change)}</td>
         </tr>
       </table>
     </div>
 
     <div class="section-block">
-      <div class="section-title">8. Detailed Document & Photo Verification Checklists</div>
+      <div class="section-title">8. Detailed Document Checklist</div>
       <table class="checklist-table">
         <tr>
-          <td class="label">North to South View Photo</td>
-          <td>${getStatusBadge(d.photoNorthSouth)}</td>
-          <td class="label">South to North View Photo</td>
-          <td>${getStatusBadge(d.photoSouthNorth)}</td>
+          <td class="label">Aadhar Card Copy</td>
+          <td>${getStatusBadge(d.Aadhar_Card)}</td>
+          <td class="label">Pan Card Copy</td>
+          <td>${getStatusBadge(d.Pan_Card)}</td>
         </tr>
         <tr>
-          <td class="label">East to West View Photo</td>
-          <td>${getStatusBadge(d.photoEastWest)}</td>
-          <td class="label">West to East View Photos</td>
-          <td>${getStatusBadge(d.photoWestEast)}</td>
-        </tr>
-        <tr>
-          <td class="label">Panel Mounting Location</td>
-          <td>${getStatusBadge(d.photoPanelMounting)}</td>
-          <td class="label">Geo Tagged Roof Photo</td>
-          <td>${getStatusBadge(d.photoGeoTagged)}</td>
-        </tr>
-        <tr>
-          <td class="label">Roof Videos</td>
-          <td>${getStatusBadge(d.videoRoof)}</td>
-          <td class="label">Roof Surround Videos</td>
-          <td>${getStatusBadge(d.videoSurround)}</td>
-        </tr>
-        <tr>
-          <td class="label">Building Full View Photo</td>
-          <td>${getStatusBadge(d.photoBuildingView)}</td>
-          <td class="label">KSEB Meter Photo</td>
-          <td>${getStatusBadge(d.photoMeter)}</td>
-        </tr>
-        <tr>
-          <td class="label">Earthing Location Photo</td>
-          <td>${getStatusBadge(d.photoEarthing)}</td>
-          <td class="label">Inverter / DB Location</td>
-          <td>${getStatusBadge(d.photoInverterDb)}</td>
+          <td class="label">EB Bill Copy</td>
+          <td>${getStatusBadge(d.EB_Bill_Copy)}</td>
+          <td class="label">Building Tax Copy</td>
+          <td>${getStatusBadge(d.Building_Tax_Copy)}</td>
         </tr>
       </table>
     </div>
@@ -644,36 +600,36 @@ export const getSurveyReportTemplate = (formData) => {
       <table class="data-table" style="margin-bottom: 5px;">
         <tr>
           <td class="label">Mode of Payment</td>
-          <td class="value"><strong>${d.paymentMode || 'N/A'}</strong></td>
+          <td class="value"><strong>${d.Mode_of_Payment || 'N/A'}</strong></td>
           <td class="label">Advance Booking Collected</td>
-          <td class="value">${getStatusBadge(d.advanceCollectionStatus)}</td>
+          <td class="value">${getStatusBadge(d.Advance_payment_Received)}</td>
         </tr>
         <tr>
           <td class="label">Product / Package Name</td>
-          <td class="value" colspan="3"><strong>${d.productName || 'N/A'}</strong></td>
+          <td class="value" colspan="3"><strong>${d.Product_Name || 'N/A'}</strong></td>
         </tr>
       </table>
       
       <div class="pricing-highlight">
         <div class="pricing-row">
-          <span>Total Plant Cost (System Standard Setup):</span>
-          <span>₹${Number(d.totalPlantCost || 0).toLocaleString('en-IN')}</span>
+          算 Total Plant Cost (System Standard Setup):</span>
+          <span>₹${Number(d.Total_Plant_Cost || 0).toLocaleString('en-IN')}</span>
         </div>
         <div class="pricing-row" style="color: #c5221f;">
           <span>Government Subsidy Discount (-):</span>
-          <span>- ₹${Number(d.governmentSubsidy || 0).toLocaleString('en-IN')}</span>
+          <span>- ₹${Number(d.Subsidy_Amount || 0).toLocaleString('en-IN')}</span>
         </div>
         <div class="pricing-row">
-          <span>Additional KSEB Charges:</span>
-          <span>₹${Number(d.additionalKsebCharges || 0).toLocaleString('en-IN')}</span>
+          <span>Additional EB / KSEB Charges:</span>
+          <span>₹${Number(d.Additional_EB_Charges || 0).toLocaleString('en-IN')}</span>
         </div>
         <div class="pricing-row">
-          <span>Additional Structure/Customization Charges:</span>
-          <span>₹${Number(d.additionalStructureCost || 0).toLocaleString('en-IN')}</span>
+          <span>Additional Structure Charges:</span>
+          <span>₹${Number(d.Additional_Structure_Cost || 0).toLocaleString('en-IN')}</span>
         </div>
         <div class="pricing-row total">
           <span>Calculated Cost After Subsidy (Net Due):</span>
-          <span>₹${Number(d.netCostAfterSubsidy || (Number(d.totalPlantCost || 0) - Number(d.governmentSubsidy || 0) + Number(d.additionalKsebCharges || 0) + Number(d.additionalStructureCost || 0))).toLocaleString('en-IN')}</span>
+          <span>₹${Number(d.Plant_Cost_After_Subsidy || (Number(d.Total_Plant_Cost || 0) - Number(d.Subsidy_Amount || 0) + Number(d.Additional_EB_Charges || 0) + Number(d.Additional_Structure_Cost || 0))).toLocaleString('en-IN')}</span>
         </div>
       </div>
     </div>
@@ -681,18 +637,22 @@ export const getSurveyReportTemplate = (formData) => {
     <div class="section-block">
       <div class="section-title">10. Field Observations & Technical Remarks</div>
       <div style="border: 1px solid #dadce0; padding: 12px; min-height: 40px; background-color: #fdfdfd; font-size: 11px; white-space: pre-line;">
-        ${d.remarks || 'No critical installation risks noted at the time of site survey evaluation.'}
+        ${d.Site_Survey_Remarks || 'No critical installation risks noted at the time of site survey evaluation.'}
       </div>
     </div>
 
     <div class="signature-container">
       <div class="signature-box">
-        <div class="sig-space">${d.siteEngineerSignature ? `<img src="${d.siteEngineerSignature}" style="max-height: 35px;" />` : d.engineerName || 'Praveen Kumar'}</div>
+        <div class="sig-space">
+          ${d.Site_Engineer_Signature ? `<img src="${d.Site_Engineer_Signature}" style="max-height: 55px; max-width: 100%;" />` : d.Assigned_To || 'Authorized Engineer'}
+        </div>
         <strong>SITE ENGINEER SIGNATURE</strong><br>
         <span style="font-size: 9px; color:#888;">Date: ${displayDate} | Time: ${displayTime}</span>
       </div>
       <div class="signature-box">
-        <div class="sig-space">${d.customerConfirmationSignature ? `<img src="${d.customerConfirmationSignature}" style="max-height: 35px;" />` : d.clientName || 'Authorized Signatory'}</div>
+        <div class="sig-space">
+          ${d.Customer_Confirmation_Signature ? `<img src="${d.Customer_Confirmation_Signature}" style="max-height: 55px; max-width: 100%;" />` : d.Consumer_Name || 'Authorized Signatory'}
+        </div>
         <strong>CUSTOMER CONFIRMATION SIGNATURE</strong><br>
         <span style="font-size: 9px; color:#888;">Kondaas Automation Authorization Signature</span>
       </div>

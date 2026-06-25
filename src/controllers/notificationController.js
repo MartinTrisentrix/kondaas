@@ -126,10 +126,10 @@ export const triggerScenarioNotification = async (c) => {
               return;
             }
 
-            // Bind transaction details into form reference object memory 
+            // Bind transaction details into form reference object memory using our updated Zoho Schema properties
             formData.deal_id = deal_id;
-            formData.invoiceNo = `INV-${deal_id}`;
-            formData.invoiceDate = new Date().toLocaleDateString('en-IN');
+            formData.Report_Number = `KON-SRV-${new Date().getFullYear()}-${String(deal_id).slice(-4).toUpperCase()}`;
+            formData.Site_Survey_Requested_Date_Time = new Date().toISOString();
 
             // -------------------------------------------------------------
             // 📑 PART A: GENERATE & UPLOAD THE SITE SURVEY TECHNICAL REPORT
@@ -145,7 +145,7 @@ export const triggerScenarioNotification = async (c) => {
             const targetSurveyFolderId = await getOrCreateLeadsSEFolder(deal_id, "Survey");
             
             const surveyPublicUrl = await uploadToZohoWorkDrive(surveyFilePath, surveyFileName, targetSurveyFolderId);
-            console.log(`✅ Survey Report synced successfully to Zoho: ${surveyPublicUrl}`);
+            console.log(`✅ Survey Report synced successfully to WorkDrive: ${surveyPublicUrl}`);
 
             // Clear local temporary survey workspace file
             fs.unlink(surveyFilePath, (err) => {
@@ -153,7 +153,7 @@ export const triggerScenarioNotification = async (c) => {
             });
 
             // ----------------------------------------------------------------------
-            // 🎯 LINK ATTACHMENT: ATTACH WORKDRIVE URL TO ZOHO CRM
+            // 🎯 LINK ATTACHMENT: ATTACH WORKDRIVE URL TO ZOHO CRM DEALS FIELD
             // ----------------------------------------------------------------------
             try {
               console.log(`📡 Attaching survey report link to Zoho CRM Deals for ID: ${deal_id}`);
@@ -161,7 +161,7 @@ export const triggerScenarioNotification = async (c) => {
 
               const linkPayload = {
                 id: deal_id,
-                Site_Survey: surveyPublicUrl // Attach the fresh generated file URL
+                Site_Survey: String(surveyPublicUrl).trim() // 🚀 FIXED: Dynamic injection to your custom Zoho text field layout
               };
 
               const crmResponse = await fetch(`https://www.zohoapis.in/crm/v8/Deals/${deal_id}`, {
@@ -177,7 +177,7 @@ export const triggerScenarioNotification = async (c) => {
                 const errDetails = await crmResponse.text();
                 console.error("❌ Zoho CRM Link Attachment Blocked:", errDetails);
               } else {
-                console.log(`✅ Site Survey WorkDrive link updated on Zoho record.`);
+                console.log(`✅ Site Survey WorkDrive link updated on Zoho record field.`);
               }
             } catch (crmErr) {
               console.error("⚠️ Non-blocking warning: CRM link attachment dropped:", crmErr.message);
@@ -205,7 +205,7 @@ export const triggerScenarioNotification = async (c) => {
             });
 
             // -------------------------------------------------------------
-            // 📥 PART D: QUEUE INVOICE WHATSAPP DELIVERY TO CLIENT
+            // <strong> PART D: QUEUE INVOICE WHATSAPP DELIVERY TO CLIENT
             // -------------------------------------------------------------
             const pdfResult = await db.collection("notifications").insertOne({
               from: "Kondaas_System",
