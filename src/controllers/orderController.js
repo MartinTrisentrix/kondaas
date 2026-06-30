@@ -115,8 +115,8 @@ export const rejectOrder = async (c) => {
         time: receivedAt ? new Date(Number(receivedAt)).toISOString() : null
       };
 
-      await db.collection("admin_reject").insertOne(adminRejectPayload);
-      console.log(`✅ Rejection tracked locally in admin_reject collection for surveyor: ${surveyorNumber}`);
+      await db.collection("surveyor_reject").insertOne(adminRejectPayload);
+      console.log(`✅ Rejection tracked locally in surveyor_reject collection for surveyor: ${surveyorNumber}`);
 
       // 2. Look up active Administrator accounts to fetch their FCM tokens
       try {
@@ -199,8 +199,8 @@ export const completeOrder = async (c) => {
         time: receivedAt ? new Date(Number(receivedAt)).toISOString() : null
       };
 
-      await db.collection("admin_complete").insertOne(adminCompletePayload);
-      console.log(`✅ Completion tracked locally in admin_complete collection for surveyor: ${surveyorNumber}`);
+      await db.collection("surveyor_complete").insertOne(adminCompletePayload);
+      console.log(`✅ Completion tracked locally in surveyor_complete collection for surveyor: ${surveyorNumber}`);
 
       return c.json({ success: true, message: "Order completion cataloged locally." });
     });
@@ -213,7 +213,7 @@ export const completeOrder = async (c) => {
 export const getAdminRejections = async (c) => {
   try {
     return await withDatabase(MONGODB_URI, async (db) => {
-      const rejections = await db.collection("admin_reject").find({}).sort({ time: -1 }).toArray();
+      const rejections = await db.collection("surveyor_reject").find({}).sort({ time: -1 }).toArray();
       return c.json({ success: true, count: rejections.length, data: rejections }, 200);
     });
   } catch (err) {
@@ -224,7 +224,7 @@ export const getAdminRejections = async (c) => {
 export const getAdminCompletions = async (c) => {
   try {
     return await withDatabase(MONGODB_URI, async (db) => {
-      const completions = await db.collection("admin_complete").find({}).sort({ time: -1 }).toArray();
+      const completions = await db.collection("surveyor_complete").find({}).sort({ time: -1 }).toArray();
       return c.json({ success: true, count: completions.length, data: completions }, 200);
     });
   } catch (err) {
