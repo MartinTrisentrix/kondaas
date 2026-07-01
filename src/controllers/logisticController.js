@@ -155,6 +155,55 @@ export const getLogisticsDealsByMobile = async (c) => {
   }
 };
 
+export const updateLogisticsStatus = async (c) => {
+  try {
+    const body = await c.req.json();
+    const { deal_id, status } = body;
+
+    // 1. Core validation guard clause
+    if (!deal_id || !status) {
+      return c.json({ success: false, error: "Missing deal_id or status in request body" }, 400);
+    }
+
+    // 2. Strict white-list status validation to protect data integrity
+    const allowedStatuses = ["accepted", "inprogress", "completed"];
+    if (!allowedStatuses.includes(status)) {
+      return c.json({ 
+        success: false, 
+        error: `Invalid status. Must be one of: ${allowedStatuses.join(", ")}` 
+      }, 400);
+    }
+
+    return await withDatabase(MONGODB_URI, async (db) => {
+      // 3. Update the status and append a trailing audit timestamp
+      const updateResult = await db.collection("logistics_deals").updateOne(
+        { deal_id: deal_id },
+        { 
+          $set: { 
+            status: status,
+            updatedAt: new Date()
+          } 
+        }
+      );
+
+      // 4. Verify that the deal profile actually exists
+      if (updateResult.matchedCount === 0) {
+        return c.json({ success: false, error: "No logistics record found matching that deal_id" }, 404);
+      }
+
+      console.log(`⚡ Logistics Deal ${deal_id} status updated to: ${status.toUpperCase()}`);
+
+      return c.json({ 
+        success: true, 
+        message: `Logistics pipeline successfully moved to ${status}.` 
+      }, 200);
+    });
+
+  } catch (err) {
+    console.error("❌ updateLogisticsStatus Exception Error:", err.message);
+    return c.json({ success: false, error: "Internal Server Error updating logistics state" }, 500);
+  }
+};
 
 export const rejectLogisticsDeal = async (c) => {
   try {
