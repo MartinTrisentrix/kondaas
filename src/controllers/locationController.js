@@ -123,3 +123,58 @@ export const getCurrentLocation = async (c) => {
     return c.json({ error: err.message }, 500);
   }
 };
+
+
+export const saveJobCoordinates = async (c) => {
+  try {
+    const body = await c.req.json();
+    const { dealId, startLat, startLng, endLat, endLng } = body;
+
+    // 1. Strict input validation
+    if (!dealId || startLat === undefined || startLng === undefined || endLat === undefined || endLng === undefined) {
+      return c.json({
+        success: false,
+        message: "Missing required parameters. Ensure dealId, startLat, startLng, endLat, and endLng are sent."
+      }, 400);
+    }
+
+    return await withDatabase(MONGODB_URI, async (db) => {
+      // We log this into its own clean collection tracking trips/journeys
+      const locationCollection = db.collection("deal_distance");
+
+      // 2. Build the straight insert payload layout
+      const newCoordinatesLog = {
+        dealId: String(dealId).trim(),
+        startLocation: {
+          latitude: Number(startLat),
+          longitude: Number(startLng)
+        },
+        endLocation: {
+          latitude: Number(endLat),
+          longitude: Number(endLng)
+        },
+        createdAt: new Date()
+      };
+
+      // 3. Raw insert into the database with no lookups or updates needed
+      const result = await locationCollection.insertOne(newCoordinatesLog);
+
+      console.log(`📍 [GPS Log Saved] Inserted a new journey record for Deal: ${dealId}`);
+
+      return c.json({
+        success: true,
+        message: "Trip tracking coordinates logged successfully.",
+        logId: result.insertedId
+      }, 201);
+    });
+
+  } catch (error) {
+    console.error("❌ Exception inside saveJobCoordinates pipeline:", error.message);
+    return c.json({
+      success: false,
+      message: "Internal configuration error logging trip metrics.",
+      error: error.message
+    }, 500);
+  }
+};
+
