@@ -4,16 +4,13 @@
 FROM node:20-slim AS builder
 WORKDIR /app
 
-# Copy your package configuration files first
 COPY package*.json ./
 
-# 💡 TRICK 1: Block Puppeteer from automatically downloading its own massive browser copy
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+# 🎯 Tell Puppeteer to download the browser inside /app instead of the root folder
+ENV PUPPETEER_CACHE_DIR=/app/.cache
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
 
-# Install your dependencies cleanly inside the build stage
 RUN npm ci
-
-# Copy the rest of your backend source code
 COPY . .
 
 
@@ -23,23 +20,37 @@ COPY . .
 FROM node:20-slim
 WORKDIR /app
 
-# 💡 TRICK 2: Install ONLY the system Chromium and minimal fonts, 
-# then immediately clean up the apt cache records to save hundreds of MBs!
+# Ensure Puppeteer knows exactly where to look for the copied browser build
+ENV PUPPETEER_CACHE_DIR=/app/.cache
+
+# Install the baseline system dependencies needed for headless browsers
 RUN apt-get update && apt-get install -y \
-    chromium \
+    wget \
+    ca-certificates \
     fonts-freefont-ttf \
-    libxss1 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxrandr2 \
+    libxtst6 \
+    libgbm1 \
+    libnss3 \
+    libasound2 \
+    libpangocairo-1.0-0 \
+    libpango-1.0-0 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
     --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy the pre-built files and node_modules straight from Stage 1 (Builder)
+# Copy everything (including the downloaded browser in /app/.cache) from Stage 1
 COPY --from=builder /app /app
-
-# 💡 TRICK 3: Force Puppeteer to launch the system-wide Linux Chromium executable path
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Open Port 3002
 EXPOSE 3002
 
-# The command to start your backend server
+# Start the application
 CMD ["node", "index.js"]

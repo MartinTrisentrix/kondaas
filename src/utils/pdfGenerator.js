@@ -2,18 +2,19 @@ import os from 'os';
 import puppeteer from 'puppeteer';
 
 export const generatePDF = async (htmlContent, outputPath) => {
-  // Determine if we are running on Linux (AWS) or Windows (Local)
-  const isLinux = os.platform() === 'linux';
-  
   const launchOptions = {
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: [
+      '--no-sandbox', 
+      '--disable-setuid-sandbox',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--disable-features=dbus'
+    ]
   };
 
-  // 🔥 ONLY apply the hardcoded path if we are actually on the Linux production server!
-  if (isLinux) {
-    launchOptions.executablePath = '/usr/bin/chromium';
-  }
+  // 🎯 CRITICAL FIX: Do NOT force executablePath to /usr/bin/chromium anymore!
+  // Puppeteer will automatically find its own matching standalone browser.
 
   const browser = await puppeteer.launch(launchOptions);
 

@@ -58,39 +58,31 @@ export const addForm = async (c) => {
     const uploadDir = path.join(process.cwd(), 'uploads');
     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-    // 🎯 Define your clean explicit field-names map array list
-    const targetFileFields = [
-      "Site_Survey_Photos", "North_to_South_View_Photo", "South_to_North_View_Photo",
-      "East_to_West_View_Photo", "West_to_East_View_Photos", "Panel_Mounting_Location_Photo",
-      "Geo_Tagged_Roof_Photo", "Building_Full_View_Photo", "KSEB_Meter_Photo",
-      "Earthing_Location_Photo", "Inverter_DB_Fixing_Location_Photo", "Roof_Videos",
-      "Roof_Surround_Videos", "Advance_Payment_Screenshot", "Aadhar_Card",
-      "Pan_Card", "Passport_Size_Photo", "Bank_Passbook_Copy", "EB_Bill_Copy"
-    ];
-
     const uploadedFileUrls = {};
 
     // -------------------------------------------------------------------------
-    // DYNAMIC FILE LOOP PROCESSOR: Handle photos & videos via field-level isolation
+    // 🎯 100% DYNAMIC FILE LOOP PROCESSOR: No hardcoded array fields!
     // -------------------------------------------------------------------------
-    for (const fieldName of targetFileFields) {
-      const rawFile = body[fieldName];
-      if (!rawFile) continue; // Skip fields not sent in this specific request payload
+    for (const fieldName of Object.keys(body)) {
+      const rawValue = body[fieldName];
+      if (!rawValue) continue;
 
-      // Normalize into array formatting in case multi-files are accidentally passed
-      const filesArray = Array.isArray(rawFile) ? rawFile : [rawFile];
+      // Normalize into array formatting to seamlessly evaluate all fields
+      const valuesArray = Array.isArray(rawValue) ? rawValue : [rawValue];
+      
+      // Filter out any native text inputs; we only look for objects that behave like uploaded files
+      const filesArray = valuesArray.filter(val => val && typeof val === 'object' && 'name' in val);
+      if (filesArray.length === 0) continue; 
 
       for (let i = 0; i < filesArray.length; i++) {
         const file = filesArray[i];
         if (file && file.name) {
-          // 📁 Step A: Determine correct destination folder name parameters
-          // "EB_Bill_Copy" maps to its own folder, everything else sits directly in "site"
+          // 📁 Step A: Determine correct destination folder name parameters dynamically
           const targetFolderName = (fieldName === "EB_Bill_Copy") ? "last 6 month EBbill" : "site";
           const targetFolderId = await getOrCreateLeadsSEFolder(dealId, targetFolderName);
 
-          // 💾 Step B: Build localized temp file path and enforce field name mapping rules
+          // 💾 Step B: Build localized temp file path and enforce clean field-based file naming rules
           const ext = path.extname(file.name) || '.jpg';
-          // Name it exactly like the fieldName (add index if more than one file exists per field)
           const customFileName = filesArray.length > 1 ? `${fieldName}_${i + 1}${ext}` : `${fieldName}${ext}`;
           const tempPath = path.join(uploadDir, `temp_${dealId}_${fieldName}_${i}_${Date.now()}${ext}`);
           
@@ -98,7 +90,7 @@ export const addForm = async (c) => {
 
           // Write file binary buffer to local disk space temporarily
           fs.writeFileSync(tempPath, Buffer.from(await file.arrayBuffer()));
-          console.log(`🎬 Streaming asset [${fieldName}] directly to Zoho WorkDrive Folder: [${targetFolderName}]`);
+          console.log(`🎬 Streaming dynamic asset [${fieldName}] directly to Zoho WorkDrive Folder: [${targetFolderName}]`);
 
           // 📡 Step C: Pass the custom target filename directly into your upload utility helper
           const url = await uploadToZohoWorkDrive(tempPath, customFileName, targetFolderId);
@@ -123,7 +115,6 @@ export const addForm = async (c) => {
         deal_id: dealId,
         mobileNumber,
         ...dataFields,
-        // Stores all structured file map references cleanly right into your MongoDB document
         uploadedMediaUrls: uploadedFileUrls,
         createdAt: new Date().toISOString()
       };

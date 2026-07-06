@@ -579,11 +579,27 @@ export const assignDealToSurveyor = async (c) => {
       comment,
       status,
       date,
-      surveyorNumber
+      surveyorNumber: rawSurveyorNumber
     } = body;
 
-    if (!id || !surveyorNumber || !mobile) {
+    if (!id || !rawSurveyorNumber || !mobile) {
       return c.json({ error: "Missing required fields: id (deal_id), surveyorNumber, or mobile" }, 400);
+    }
+
+    // 🧼 CLEAN PHONE NUMBERS (Strips formatting symbols and drops leading country codes)
+    let surveyorNumber = String(rawSurveyorNumber).replace(/\D/g, '');
+    if (surveyorNumber.length === 12 && surveyorNumber.startsWith('91')) {
+      surveyorNumber = surveyorNumber.substring(2);
+    }
+
+    let cleanMobile = mobile ? String(mobile).replace(/\D/g, '') : null;
+    if (cleanMobile && cleanMobile.length === 12 && cleanMobile.startsWith('91')) {
+      cleanMobile = cleanMobile.substring(2);
+    }
+
+    let cleanWhatsappNo = whatsappNo ? String(whatsappNo).replace(/\D/g, '') : null;
+    if (cleanWhatsappNo && cleanWhatsappNo.length === 12 && cleanWhatsappNo.startsWith('91')) {
+      cleanWhatsappNo = cleanWhatsappNo.substring(2);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
@@ -591,8 +607,8 @@ export const assignDealToSurveyor = async (c) => {
       const fullDealPayload = {
         deal_id: id,
         deal_name: name || "New Site Opportunity",
-        mobile: mobile || null,
-        whatsappNo: whatsappNo || null,
+        mobile: cleanMobile,
+        whatsappNo: cleanWhatsappNo,
         email: email || null,
         city: city || null,
         address: address || null,
@@ -633,14 +649,15 @@ export const assignDealToSurveyor = async (c) => {
       if (activeDevice) {
         surveyorTokens.push(activeDevice.fcmToken);
       } else {
-        // Fallback: If flag isn't set, collect all available tokens as a backup safety net
+        // Fallback: Collect all available tokens as a backup safety net
         devices.forEach((device) => {
           if (device.fcmToken) surveyorTokens.push(device.fcmToken);
         });
       }
 
       if (surveyorTokens.length > 0) {
-        const structuredBody = `👤 Name : ${name || 'N/A'}\n📍 Address : ${address || 'N/A'}\n⚡ Kilovolts : ${kilovolt || 'N/A'}`;
+        // Fixed the trailing syntax brace typo here from your template layout context
+        const structuredBody = `👤 Name : ${name || 'N/A'}\n📍 Address : ${address || 'N/A'}`;
 
         const message = {
           notification: {
@@ -654,7 +671,6 @@ export const assignDealToSurveyor = async (c) => {
               sound: "kondaas",
               clickAction: "FLUTTER_NOTIFICATION_CLICK",
             },
-            // ✅ ACTION BUTTONS - Accept & Reject
             fcmOptions: {
               analyticsLabel: "lead_assignment"
             }
@@ -664,7 +680,6 @@ export const assignDealToSurveyor = async (c) => {
               aps: {
                 sound: "kondaas.caf",
                 contentAvailable: true,
-                // ✅ iOS Action buttons
                 alert: {
                   title: "🔔 New Lead Nearby!",
                   body: structuredBody,
@@ -678,10 +693,10 @@ export const assignDealToSurveyor = async (c) => {
             click_action: "FLUTTER_NOTIFICATION_CLICK",
             type: "ASSIGNMENT",
             customer_name: name || "",
-            customer_mobile: mobile || "",
+            customer_mobile: cleanMobile || "",      // Clean parameter mapped to data object
             customer_address: address || "",
             leadId: String(id),
-            customerMobile: mobile || "",
+            customerMobile: cleanMobile || "",      // Clean parameter mapped to data object
             customerName: name || "",
             address: address || "",
           },
@@ -723,16 +738,14 @@ export const zohoWorkflowAssignment = async (c) => {
 
     const id = payload.deal_id || payload.id;
     const name = payload.deal_name || payload.name;
-    const mobile = payload.mobile || null;
-    const whatsappNo = payload.whatsappNo || payload.customer_whatsapp || null;
     const email = payload.Email || payload.customer_email || null;
     const city = payload.city || null;
-    const state=payload.state || null;
+    const state = payload.state || null;
     const address = payload.address || null;
     const latitude = payload.latitude || null;
     const longitude = payload.longitude || null;
     const referred_by = payload.referred_by || null;
-    const Site_Survey_Req_Date_Time= payload.Site_Survey_Req_Date_Time || null;
+    const Site_Survey_Req_Date_Time = payload.Site_Survey_Req_Date_Time || null;
     const comment = payload.comment || "Assigned via Zoho CRM Automated Field Update";
     const status = payload.status || "unaccepted";
     const kilovolt = payload.kilovolt || null;
@@ -744,9 +757,24 @@ export const zohoWorkflowAssignment = async (c) => {
       return c.json({ error: "Missing required fields: id or site_engineer_contact from Zoho payload" }, 400);
     }
 
+    // 🧼 Clean and strip phone formatting symbols from surveyor/engineer contact
     let surveyorNumber = String(siteEngineerContact).replace(/\D/g, '');
     if (surveyorNumber.length === 12 && surveyorNumber.startsWith('91')) {
       surveyorNumber = surveyorNumber.substring(2);
+    }
+
+    // 🧼 CLEAN CUSTOMER PHONE NUMBERS BEFORE DB STORAGE AND FCM DELIVERY
+    let cleanMobile = payload.mobile ? String(payload.mobile).replace(/\D/g, '') : null;
+    if (cleanMobile && cleanMobile.length === 12 && cleanMobile.startsWith('91')) {
+      cleanMobile = cleanMobile.substring(2);
+    }
+
+    let cleanWhatsappNo = payload.whatsappNo || payload.customer_whatsapp || null;
+    if (cleanWhatsappNo) {
+      cleanWhatsappNo = String(cleanWhatsappNo).replace(/\D/g, '');
+      if (cleanWhatsappNo.length === 12 && cleanWhatsappNo.startsWith('91')) {
+        cleanWhatsappNo = cleanWhatsappNo.substring(2);
+      }
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
@@ -754,15 +782,15 @@ export const zohoWorkflowAssignment = async (c) => {
       const fullDealPayload = {
         deal_id: id,
         deal_name: name || "New Site Opportunity",
-        mobile: mobile,
-        whatsappNo: whatsappNo,
+        mobile: cleanMobile,       // Saved clean
+        whatsappNo: cleanWhatsappNo, // Saved clean
         email: email,
         city: city,
         address: address,
         latitude: latitude,
         longitude: longitude,
         comment: comment,
-        referred_by:referred_by,
+        referred_by: referred_by,
         Site_Survey_Req_Date_Time: Site_Survey_Req_Date_Time,
         status: status,
         siteSurveyStatus: "notassigned",
@@ -820,7 +848,6 @@ export const zohoWorkflowAssignment = async (c) => {
               sound: "kondaas",
               clickAction: "FLUTTER_NOTIFICATION_CLICK",
             },
-            // ✅ ACTION BUTTONS - Accept & Reject
             fcmOptions: {
               analyticsLabel: "lead_assignment"
             }
@@ -830,7 +857,6 @@ export const zohoWorkflowAssignment = async (c) => {
               aps: {
                 sound: "kondaas.caf",
                 contentAvailable: true,
-                // ✅ iOS Action buttons
                 alert: {
                   title: "🔔 New Lead Nearby!",
                   body: structuredBody,
@@ -844,11 +870,11 @@ export const zohoWorkflowAssignment = async (c) => {
             click_action: "FLUTTER_NOTIFICATION_CLICK",
             type: "ASSIGNMENT",
             customer_name: name || "",
-            customer_mobile: mobile || "",
+            customer_mobile: cleanMobile || "",      // Sent clean to frontend
             customer_address: address || "",
             kilovolt: String(kilovolt || ""),
             leadId: String(id),
-            customerMobile: mobile || "",
+            customerMobile: cleanMobile || "",      // Sent clean to frontend
             customerName: name || "",
             address: address || "",
           },
