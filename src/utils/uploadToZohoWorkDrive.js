@@ -33,7 +33,7 @@ export const createZohoPublicDownloadUrl = async (db, resourceId) => {
         attributes: {
           resource_id: String(resourceId).trim(),
           link_name: "WhatsApp Invoice Download Link",
-          link_type: "download", // 🔥 CRITICAL: Instructs Zoho to bypass the HTML viewer page
+          link_type: "download",
           allow_download: true,
           request_user_data: false
         }
@@ -318,15 +318,7 @@ export const getOrCreateLeadsSEFolder = async (dealId, subfolderType, state) => 
     console.log(`📝 Cache Miss! Path [${fullSubfolderPathKey}] not cached. Verifying live folder structure...`);
     const zAccessToken = await getZohoAccessToken(db);
 
-    // =========================================================================
-    // 🔍 LIVE DEBUGGING FOOTPRINT PRINT ENGINE
-    // =========================================================================
-    console.log("-----------------------------------------");
-    console.log(`📡 [DEBUG] Target State Context : ${regionPrefix.toUpperCase()}`);
-    console.log(`📡 [DEBUG] Selected Root ID     : ${SELECTED_ROOT_ID}`);
-    console.log(`📡 [DEBUG] Active OAuth Token    : ${zAccessToken ? `${zAccessToken.substring(0, 15)}... (Truncated)` : "MISSING ❌"}`);
-    console.log("-----------------------------------------");
-    // =========================================================================
+
 
     let dealFolderId;
     const cachedDealFolder = await cacheCollection.findOne({ type: "leads_se_deal", path: dealPathKey });

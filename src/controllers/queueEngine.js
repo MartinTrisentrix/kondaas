@@ -3,9 +3,9 @@ import { withDatabase } from '../utils/config.js';
 import { getSolarmanDataCore } from './solarmanController.js'; 
 import admin from 'firebase-admin';
 
-/**
- * ⏰ Helper: Calculates the upcoming Sunday at 8:00 PM Local Time
- */
+// 🌐 Global Production Database Configuration Connection Key
+const MONGODB_URI = process.env.MONGODB_URI;
+
 const getNextSunday8PM = () => {
   const now = new Date();
   const resultDate = new Date(now);
@@ -24,9 +24,6 @@ const getNextSunday8PM = () => {
   return resultDate;
 };
 
-/**
- * 📅 Helper: Calculates the last day of the current or next month at 8:00 PM Local Time
- */
 const getNextMonthEnd8PM = () => {
   const now = new Date();
   
@@ -47,11 +44,14 @@ export const startQueueRunner = () => {
   setInterval(async () => {
     try {
       const now = new Date();
-      const mongoUri = process.env.MONGODB_URI;
 
-      if (!mongoUri) return;
+      if (!MONGODB_URI) {
+        console.error("⚠️ Master Queue Runner: MONGODB_URI configuration string is completely missing.");
+        return;
+      }
 
-      await withDatabase(mongoUri, async (db) => {
+      // 🔐 Standardized connection lifecycle execution abstraction wrapper
+      await withDatabase(MONGODB_URI, async (db) => {
         
         // 🔍 Find pending solar report summaries ready to run right now
         const job = await db.collection("jobs_queue").findOneAndUpdate(
@@ -91,7 +91,7 @@ export const startQueueRunner = () => {
       });
 
     } catch (error) {
-      console.error("❌ Error in Master Queue Runner loop:", error);
+      console.error("❌ Error in Master Queue Runner loop:", error.message);
     }
   }, 30000); // Polls database state safely every 30 seconds
 };

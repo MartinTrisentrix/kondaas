@@ -389,7 +389,6 @@ export const getOrders = async (c) => {
           longitude: deal.Address_Coordinates_Longitude || deal.Longitude || null,
 
           comment: deal.Description || "",
-          status: deal.Stage?.toLowerCase() || "unaccepted",
           siteSurveyStatus: cleanedSurveyStatus || "accepted",
           kilovolt: deal.Wattage_Required || null,
 
@@ -577,7 +576,6 @@ export const assignDealToSurveyor = async (c) => {
       latitude,
       longitude,
       comment,
-      status,
       date,
       surveyorNumber: rawSurveyorNumber
     } = body;
@@ -790,7 +788,6 @@ export const zohoWorkflowAssignment = async (c) => {
         comment: comment,
         referred_by: referred_by,
         Site_Survey_Req_Date_Time: Site_Survey_Req_Date_Time,
-        status: status,
         siteSurveyStatus: "notassigned",
         kilovolt: kilovolt,
         date: date,
