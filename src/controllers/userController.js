@@ -2,7 +2,7 @@ import { withDatabase } from '../utils/config.js';
 import fs from 'fs';
 import path from 'path';
 import { getZohoAccessToken } from '../utils/zohoAuth.js';
-import { uploadToZohoWorkDrive,getOrCreateLeadsSEFolder } from '../utils/uploadToZohoWorkDrive.js';
+import { uploadToZohoWorkDrive, getOrCreateLeadsSEFolder } from '../utils/uploadToZohoWorkDrive.js';
 
 const MONGODB_URI = process.env.MONGODB_URI;
 
@@ -11,7 +11,7 @@ const uploadToZohoZFS = async (localFilePath, fileName, zohoToken) => {
     const formData = new FormData();
     const fileBuffer = fs.readFileSync(localFilePath);
     const fileBlob = new Blob([fileBuffer]);
-    
+
     // Standard ZFS upload parameter expects 'file'
     formData.append('file', fileBlob, fileName);
 
@@ -42,7 +42,7 @@ export const addForm = async (c) => {
   try {
     // 1. Parse Multipart Form-Data from Mobile App
     const body = await c.req.parseBody({ all: true });
-    
+
     const dataFields = typeof body.data === 'string' ? JSON.parse(body.data) : body;
     const mobileNumber = dataFields.mobileNumber || dataFields.customerDetails?.mobileNumber;
 
@@ -69,10 +69,10 @@ export const addForm = async (c) => {
 
       // Normalize into array formatting to seamlessly evaluate all fields
       const valuesArray = Array.isArray(rawValue) ? rawValue : [rawValue];
-      
+
       // Filter out any native text inputs; we only look for objects that behave like uploaded files
       const filesArray = valuesArray.filter(val => val && typeof val === 'object' && 'name' in val);
-      if (filesArray.length === 0) continue; 
+      if (filesArray.length === 0) continue;
 
       for (let i = 0; i < filesArray.length; i++) {
         const file = filesArray[i];
@@ -85,7 +85,7 @@ export const addForm = async (c) => {
           const ext = path.extname(file.name) || '.jpg';
           const customFileName = filesArray.length > 1 ? `${fieldName}_${i + 1}${ext}` : `${fieldName}${ext}`;
           const tempPath = path.join(uploadDir, `temp_${dealId}_${fieldName}_${i}_${Date.now()}${ext}`);
-          
+
           temporaryFilesToClean.push(tempPath);
 
           // Write file binary buffer to local disk space temporarily
@@ -94,11 +94,12 @@ export const addForm = async (c) => {
 
           // 📡 Step C: Pass the custom target filename directly into your upload utility helper
           const url = await uploadToZohoWorkDrive(tempPath, customFileName, targetFolderId);
-          
+
           if (!uploadedFileUrls[fieldName]) {
             uploadedFileUrls[fieldName] = [];
           }
-          uploadedFileUrls[fieldName].push(url);
+          // The multipart helper returns the structure containing url string parameters
+          uploadedFileUrls[fieldName].push(url?.url || url);
         }
       }
     }
@@ -106,7 +107,7 @@ export const addForm = async (c) => {
     // 2. Dual Write Database Execution & Live Zoho Push
     return await withDatabase(MONGODB_URI, async (db) => {
       const existing = await db.collection("forms").findOne({ mobileNumber });
-      
+
       if (existing) {
         return c.json({ error: "Mobile number already registered!" }, 400);
       }
@@ -135,28 +136,33 @@ export const addForm = async (c) => {
       // Extract field parameters passed by surveyor
       for (const [key, value] of Object.entries(dataFields)) {
         if (
-          key !== 'id' && 
-          key !== 'deal_id' && 
-          key !== '_id' && 
-          value !== undefined && 
+          key !== 'id' &&
+          key !== 'deal_id' &&
+          key !== '_id' &&
+          value !== undefined &&
           value !== null
         ) {
           const normalizedValue = typeof value === 'string' ? value.trim().toLowerCase() : value;
           const fieldDefinition = registeredProperties[key] || {};
 
           // 🖼️ Case A: Base64 signature converter layout
-          if (fieldDefinition.format === 'data-url' && typeof value === 'string' && value.startsWith('data:image')) {
+          if (
+            fieldDefinition.format === 'data-url' &&
+            key !== 'Advance_Payment_Screenshot' &&   // ✅ ADDED — dedicated block already handles this below
+            typeof value === 'string' &&
+            value.startsWith('data:image')
+          ) {
             try {
               const base64Data = value.replace(/^data:image\/\w+;base64,/, "");
               const imageBuffer = Buffer.from(base64Data, 'base64');
-              
+
               const tempPath = path.join(uploadDir, `temp_extracted_sig_${dealId}_${key}_${Date.now()}.png`);
               fs.writeFileSync(tempPath, imageBuffer);
               temporaryFilesToClean.push(tempPath);
 
               console.log(`⚡ Uploading decoded signature binary to Zoho ZFS vault: ${key}`);
               const zfsId = await uploadToZohoZFS(tempPath, `${key}.png`, zohoToken);
-              
+
               if (zfsId) {
                 dealUpdateFields[key] = [
                   {
@@ -180,7 +186,7 @@ export const addForm = async (c) => {
           }
           // 📞 Case C: Phone Sanitizer Check
           else if (fieldDefinition.pattern || key === 'Mobile' || key === 'Site_Engineer_Contact') {
-            let digitsOnly = String(value).replace(/\D/g, ''); 
+            let digitsOnly = String(value).replace(/\D/g, '');
             if (digitsOnly.length === 12 && digitsOnly.startsWith('91')) {
               digitsOnly = digitsOnly.substring(2);
             }
@@ -198,9 +204,9 @@ export const addForm = async (c) => {
               dealUpdateFields[key] = value;
             }
           } else if (
-            typeof value === 'string' && 
-            value.trim() !== '' && 
-            !isNaN(value) && 
+            typeof value === 'string' &&
+            value.trim() !== '' &&
+            !isNaN(value) &&
             !isNaN(parseFloat(value))
           ) {
             if (key === 'Consumer_Number') {
@@ -215,8 +221,41 @@ export const addForm = async (c) => {
           }
         }
       }
-      
+
       dealUpdateFields['Consumer_Number'] = parseInt(String(dealUpdateFields['Consumer_Number'] ?? '').trim(), 10) || 0;
+
+      // 🖼️ SIMPLE BASE64 SCREENSHOT CONVERTER & WORKDRIVE SYNC ENGINE
+      const screenshotString = dataFields.Advance_Payment_Screenshot;
+      if (typeof screenshotString === 'string' && screenshotString.startsWith('data:image')) {
+        try {
+          console.log(`📸 Processing Advance Payment Screenshot Base64 conversion...`);
+
+          const mimeTypeMatch = screenshotString.match(/^data:(image\/\w+);base64,/);
+          const ext = mimeTypeMatch ? `.${mimeTypeMatch[1].split('/')[1]}` : '.jpg';
+          const base64Data = screenshotString.replace(/^data:image\/\w+;base64,/, "");
+          const imageBuffer = Buffer.from(base64Data, 'base64');
+
+          const screenshotFileName = `Advance_Payment_${dealId}${ext}`;
+          const tempPath = path.join(uploadDir, `temp_pay_ss_${dealId}_${Date.now()}${ext}`);
+
+          fs.writeFileSync(tempPath, imageBuffer);
+          temporaryFilesToClean.push(tempPath);
+
+          // Resolves folder routing dynamically using the 'state' parameter 
+          const targetFolderId = await getOrCreateLeadsSEFolder(dealId, "site", dataFields.state);
+
+          console.log(`🎬 Streaming screenshot buffer straight to Zoho WorkDrive folder: [site]`);
+          const uploadResult = await uploadToZohoWorkDrive(tempPath, screenshotFileName, targetFolderId);
+
+          if (uploadResult && uploadResult.url) {
+            // Simple string extraction matching the logic of the scenario trigger function!
+            dealUpdateFields['Advance_Payment_Screenshot'] = String(uploadResult.url).trim();
+            console.log(`✅ Sync complete. URL attached to profile workspace: ${uploadResult.url}`);
+          }
+        } catch (err) {
+          console.error("⚠️ Failed to process base64 Advance Payment Screenshot:", err.message);
+        }
+      }
 
       console.log(`📡 Streaming integrated surveyor data live to Zoho Deals profile: ${dealId}`);
 
@@ -241,9 +280,9 @@ export const addForm = async (c) => {
         }
       }
 
-      return c.json({ 
-        success: true, 
-        message: "Form saved locally and pushed cleanly to Zoho CRM layout workspace!" 
+      return c.json({
+        success: true,
+        message: "Form saved locally and pushed cleanly to Zoho CRM layout workspace!"
       }, 201);
     });
 

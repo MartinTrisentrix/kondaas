@@ -139,33 +139,33 @@ export const rejectOrder = async (c) => {
 
         // 3. Send standard push notification exactly like your assignment style
         if (adminTokens.length > 0) {
-         const message = {
-  notification: {
-    title: "Job Rejected by Surveyor! ⚠️",
-    body: `Surveyor ${surveyorNumber} rejected ${name || 'Customer'}. Reason: ${comment}`,
-  },
-  // 🤖 Force High Priority and Channel Mapping for Android Default Sound
-  android: {
-    priority: "high",
-    notification: {
-      channelId: "weekly_summary_channel_v1", // Ties into your high-importance channel
-      sound: "default",
-    }
-  },
-  // 🍏 Standard iOS Default Sound Setup
-  apns: {
-    payload: {
-      aps: {
-        sound: "default"
-      }
-    }
-  },
-  data: {
-    click_action: "FLUTTER_NOTIFICATION_CLICK",
-    type: "REJECTION"
-  },
-  tokens: adminTokens,
-};
+          const message = {
+            notification: {
+              title: "Job Rejected by Surveyor! ⚠️",
+              body: `Surveyor ${surveyorNumber} rejected ${name || 'Customer'}. Reason: ${comment}`,
+            },
+            // 🤖 Force High Priority and Channel Mapping for Android Default Sound
+            android: {
+              priority: "high",
+              notification: {
+                channelId: "weekly_summary_channel_v1", // Ties into your high-importance channel
+                sound: "default",
+              }
+            },
+            // 🍏 Standard iOS Default Sound Setup
+            apns: {
+              payload: {
+                aps: {
+                  sound: "default"
+                }
+              }
+            },
+            data: {
+              click_action: "FLUTTER_NOTIFICATION_CLICK",
+              type: "REJECTION"
+            },
+            tokens: adminTokens,
+          };
 
           const response = await admin.messaging().sendEachForMulticast(message);
           console.log(`🚀 Rejection alert pushed to Admin devices. Success count: ${response.successCount}`);
@@ -517,32 +517,32 @@ export const handleZohoDealWebhook = async (c) => {
 
       // 3. Fire notifications if any admin devices were tracked down
       if (fcmTokens.length > 0) {
-       const message = {
-  notification: {
-    title: "New Deal Created! 🚀",
-    body: `Deal: ${payload.deal_name || "New Opportunity"} is now in ${payload.stage || "Qualification"}.`,
-  },
-  // 🤖 Force High Priority and Channel Mapping for Android Default Sound
-  android: {
-    priority: "high",
-    notification: {
-      channelId: "weekly_summary_channel_v1", // 👈 Tells Android to use your high-importance channel rules
-      sound: "default",
-    }
-  },
-  // 🍏 Standard iOS Default Sound Setup
-  apns: {
-    payload: {
-      aps: {
-        sound: "default"
-      }
-    }
-  },
-  data: {
-    deal_id: payload.deal_id || "",
-  },
-  tokens: fcmTokens,
-};
+        const message = {
+          notification: {
+            title: "New Deal Created! 🚀",
+            body: `Deal: ${payload.deal_name || "New Opportunity"} is now in ${payload.stage || "Qualification"}.`,
+          },
+          // 🤖 Force High Priority and Channel Mapping for Android Default Sound
+          android: {
+            priority: "high",
+            notification: {
+              channelId: "weekly_summary_channel_v1", // 👈 Tells Android to use your high-importance channel rules
+              sound: "default",
+            }
+          },
+          // 🍏 Standard iOS Default Sound Setup
+          apns: {
+            payload: {
+              aps: {
+                sound: "default"
+              }
+            }
+          },
+          data: {
+            deal_id: payload.deal_id || "",
+          },
+          tokens: fcmTokens,
+        };
 
         const response = await admin.messaging().sendEachForMulticast(message);
         console.log(`✅ Push notifications dispatched successfully to ${response.successCount} admin devices.`);
@@ -638,10 +638,10 @@ export const assignDealToSurveyor = async (c) => {
 
       let surveyorTokens = [];
       const devices = surveyorProfile.PlatformInfo?.devices || [];
-      
+
       // ⚡ TOKEN OPTIMIZATION: Try to find the active logged-in device session first
       const activeDevice = devices.find(d => d.isLastLoggedIn === true && d.fcmToken);
-      
+
       if (activeDevice) {
         surveyorTokens.push(activeDevice.fcmToken);
       } else {
@@ -743,18 +743,18 @@ export const zohoWorkflowAssignment = async (c) => {
     const referred_by = payload.referred_by || null;
     const Site_Survey_Req_Date_Time = payload.Site_Survey_Req_Date_Time || null;
     const comment = payload.comment || "Assigned via Zoho CRM Automated Field Update";
-    
-    
-    const productType=payload.Product_Type || null;
-    const orderType=payload.Order_Type || null;
-    const projectType=payload.Project_Type || null;
-    const projectModel=payload.Project_Model || null;
-    const inverterConnectionType=payload.Inverter_Connection_Type || null;
-    const inverterCapacity=payload.Inverter_Capacity || null;
-    const solarPanel_Model=payload.Solar_Panel_Model || null;
-    const solarPanelBrand =payload.Solar_Panel_Brand || null;
-    const noOfPanels=payload.No_of_Panels || null;
-    const roofType=payload.Roof_Type || null;
+
+
+    const productType = payload.Product_Type || null;
+    const orderType = payload.Order_Type || null;
+    const projectType = payload.Project_Type || null;
+    const projectModel = payload.Project_Model || null;
+    const inverterConnectionType = payload.Inverter_Connection_Type || null;
+    const inverterCapacity = payload.Inverter_Capacity || null;
+    const solarPanel_Model = payload.Solar_Panel_Model || null;
+    const solarPanelBrand = payload.Solar_Panel_Brand || null;
+    const noOfPanels = payload.No_of_Panels || null;
+    const roofType = payload.Roof_Type || null;
 
 
     const siteEngineerContact = payload.site_engineer_contact || payload.Site_Engineer_Contact;
@@ -788,8 +788,8 @@ export const zohoWorkflowAssignment = async (c) => {
       const fullDealPayload = {
         deal_id: id,
         deal_name: name || "New Site Opportunity",
-        mobile: cleanMobile,       // Saved clean
-        whatsappNo: cleanWhatsappNo, // Saved clean
+        mobile: cleanMobile,
+        whatsappNo: cleanWhatsappNo,
         email: email,
         city: city,
         address: address,
@@ -801,6 +801,17 @@ export const zohoWorkflowAssignment = async (c) => {
         siteSurveyStatus: "notassigned",
         assignedTo: surveyorNumber,
         assignedAt: new Date().toISOString(),
+        
+        productType: productType,
+        orderType: orderType,
+        projectType: projectType,
+        projectModel: projectModel,
+        inverterConnectionType: inverterConnectionType,
+        inverterCapacity: inverterCapacity,
+        solarPanelModel: solarPanel_Model,
+        solarPanelBrand: solarPanelBrand,
+        noOfPanels: noOfPanels,
+        roofType: roofType,
       };
 
       await db.collection("deals").updateOne(
@@ -823,10 +834,10 @@ export const zohoWorkflowAssignment = async (c) => {
 
       let surveyorTokens = [];
       const devices = surveyorProfile.PlatformInfo?.devices || [];
-      
+
       // ⚡ TOKEN OPTIMIZATION: Isolate the single active device layout session
       const activeDevice = devices.find(d => d.isLastLoggedIn === true && d.fcmToken);
-      
+
       if (activeDevice) {
         surveyorTokens.push(activeDevice.fcmToken);
       } else {
