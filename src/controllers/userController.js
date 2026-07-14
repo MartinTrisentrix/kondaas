@@ -98,7 +98,6 @@ export const addForm = async (c) => {
           if (!uploadedFileUrls[fieldName]) {
             uploadedFileUrls[fieldName] = [];
           }
-          // The multipart helper returns the structure containing url string parameters
           uploadedFileUrls[fieldName].push(url?.url || url);
         }
       }
@@ -135,6 +134,17 @@ export const addForm = async (c) => {
 
       // Extract field parameters passed by surveyor
       for (const [key, value] of Object.entries(dataFields)) {
+        // 🛡️ CRITICAL BYPASS: Skip processing these entirely inside this loop to prevent data/type overwrites!
+        if (
+          key === 'Advance_Payment_Screenshot' || 
+          key === 'Bank_Passbook_Copy' || 
+          key === 'Billing_Tax_Copy' ||
+          key === 'Report_Number' ||            // 📑 EXCLUDE FROM AUTO-NUMBER CASTING
+          key === 'report_number'
+        ) {
+          continue;
+        }
+
         if (
           key !== 'id' &&
           key !== 'deal_id' &&
@@ -148,7 +158,6 @@ export const addForm = async (c) => {
           // 🖼️ Case A: Base64 signature converter layout
           if (
             fieldDefinition.format === 'data-url' &&
-            key !== 'Advance_Payment_Screenshot' &&   // ✅ ADDED — dedicated block already handles this below
             typeof value === 'string' &&
             value.startsWith('data:image')
           ) {
@@ -224,12 +233,18 @@ export const addForm = async (c) => {
 
       dealUpdateFields['Consumer_Number'] = parseInt(String(dealUpdateFields['Consumer_Number'] ?? '').trim(), 10) || 0;
 
-      // 🖼️ SIMPLE BASE64 SCREENSHOT CONVERTER & WORKDRIVE SYNC ENGINE
+      // 📑 STRICT FORMAT ENFORCEMENT: Explicitly sanitizing Report Number field layout as a string
+      const rawReportNum = dataFields.Report_Number || dataFields.report_number;
+      if (rawReportNum !== undefined && rawReportNum !== null) {
+        dealUpdateFields['Report_Number'] = String(rawReportNum).trim();
+        console.log(`📑 Enforcing String format for Report Number: "${dealUpdateFields['Report_Number']}"`);
+      }
+
+      // 🖼️ 1. ADVANCE PAYMENT SCREENSHOT PROCESSING LAYER
       const screenshotString = dataFields.Advance_Payment_Screenshot;
       if (typeof screenshotString === 'string' && screenshotString.startsWith('data:image')) {
         try {
           console.log(`📸 Processing Advance Payment Screenshot Base64 conversion...`);
-
           const mimeTypeMatch = screenshotString.match(/^data:(image\/\w+);base64,/);
           const ext = mimeTypeMatch ? `.${mimeTypeMatch[1].split('/')[1]}` : '.jpg';
           const base64Data = screenshotString.replace(/^data:image\/\w+;base64,/, "");
@@ -237,24 +252,82 @@ export const addForm = async (c) => {
 
           const screenshotFileName = `Advance_Payment_${dealId}${ext}`;
           const tempPath = path.join(uploadDir, `temp_pay_ss_${dealId}_${Date.now()}${ext}`);
-
           fs.writeFileSync(tempPath, imageBuffer);
           temporaryFilesToClean.push(tempPath);
 
-          // Resolves folder routing dynamically using the 'state' parameter 
           const targetFolderId = await getOrCreateLeadsSEFolder(dealId, "site", dataFields.state);
-
-          console.log(`🎬 Streaming screenshot buffer straight to Zoho WorkDrive folder: [site]`);
           const uploadResult = await uploadToZohoWorkDrive(tempPath, screenshotFileName, targetFolderId);
 
           if (uploadResult && uploadResult.url) {
-            // Simple string extraction matching the logic of the scenario trigger function!
             dealUpdateFields['Advance_Payment_Screenshot'] = String(uploadResult.url).trim();
-            console.log(`✅ Sync complete. URL attached to profile workspace: ${uploadResult.url}`);
+            console.log(`✅ Base64 Screenshot URL Attached: ${uploadResult.url}`);
           }
         } catch (err) {
           console.error("⚠️ Failed to process base64 Advance Payment Screenshot:", err.message);
         }
+      } else if (uploadedFileUrls.Advance_Payment_Screenshot && uploadedFileUrls.Advance_Payment_Screenshot.length > 0) {
+        dealUpdateFields['Advance_Payment_Screenshot'] = String(uploadedFileUrls.Advance_Payment_Screenshot[0]).trim();
+        console.log(`✅ Multipart Screenshot URL Attached: ${dealUpdateFields['Advance_Payment_Screenshot']}`);
+      }
+
+      // 🏦 2. BANK PASSBOOK COPY PROCESSING LAYER
+      const passbookString = dataFields.Bank_Passbook_Copy;
+      if (typeof passbookString === 'string' && passbookString.startsWith('data:image')) {
+        try {
+          console.log(`📸 Processing Bank Passbook Copy Base64 conversion...`);
+          const mimeTypeMatch = passbookString.match(/^data:(image\/\w+);base64,/);
+          const ext = mimeTypeMatch ? `.${mimeTypeMatch[1].split('/')[1]}` : '.jpg';
+          const base64Data = passbookString.replace(/^data:image\/\w+;base64,/, "");
+          const imageBuffer = Buffer.from(base64Data, 'base64');
+
+          const passbookFileName = `Bank_Passbook_${dealId}${ext}`;
+          const tempPath = path.join(uploadDir, `temp_passbook_${dealId}_${Date.now()}${ext}`);
+          fs.writeFileSync(tempPath, imageBuffer);
+          temporaryFilesToClean.push(tempPath);
+
+          const targetFolderId = await getOrCreateLeadsSEFolder(dealId, "site", dataFields.state);
+          const uploadResult = await uploadToZohoWorkDrive(tempPath, passbookFileName, targetFolderId);
+
+          if (uploadResult && uploadResult.url) {
+            dealUpdateFields['Bank_Passbook_Copy'] = String(uploadResult.url).trim();
+            console.log(`✅ Base64 Bank Passbook URL Attached: ${uploadResult.url}`);
+          }
+        } catch (err) {
+          console.error("⚠️ Failed to process base64 Bank Passbook Copy:", err.message);
+        }
+      } else if (uploadedFileUrls.Bank_Passbook_Copy && uploadedFileUrls.Bank_Passbook_Copy.length > 0) {
+        dealUpdateFields['Bank_Passbook_Copy'] = String(uploadedFileUrls.Bank_Passbook_Copy[0]).trim();
+        console.log(`✅ Multipart Bank Passbook URL Attached: ${dealUpdateFields['Bank_Passbook_Copy']}`);
+      }
+
+      // 📝 3. BILLING TAX COPY PROCESSING LAYER
+      const taxCopyString = dataFields.Billing_Tax_Copy;
+      if (typeof taxCopyString === 'string' && taxCopyString.startsWith('data:image')) {
+        try {
+          console.log(`📸 Processing Billing Tax Copy Base64 conversion...`);
+          const mimeTypeMatch = taxCopyString.match(/^data:(image\/\w+);base64,/);
+          const ext = mimeTypeMatch ? `.${mimeTypeMatch[1].split('/')[1]}` : '.jpg';
+          const base64Data = taxCopyString.replace(/^data:image\/\w+;base64,/, "");
+          const imageBuffer = Buffer.from(base64Data, 'base64');
+
+          const taxCopyFileName = `Billing_Tax_${dealId}${ext}`;
+          const tempPath = path.join(uploadDir, `temp_tax_${dealId}_${Date.now()}${ext}`);
+          fs.writeFileSync(tempPath, imageBuffer);
+          temporaryFilesToClean.push(tempPath);
+
+          const targetFolderId = await getOrCreateLeadsSEFolder(dealId, "site", dataFields.state);
+          const uploadResult = await uploadToZohoWorkDrive(tempPath, taxCopyFileName, targetFolderId);
+
+          if (uploadResult && uploadResult.url) {
+            dealUpdateFields['Billing_Tax_Copy'] = String(uploadResult.url).trim();
+            console.log(`✅ Base64 Billing Tax URL Attached: ${uploadResult.url}`);
+          }
+        } catch (err) {
+          console.error("⚠️ Failed to process base64 Billing Tax Copy:", err.message);
+        }
+      } else if (uploadedFileUrls.Billing_Tax_Copy && uploadedFileUrls.Billing_Tax_Copy.length > 0) {
+        dealUpdateFields['Billing_Tax_Copy'] = String(uploadedFileUrls.Billing_Tax_Copy[0]).trim();
+        console.log(`✅ Multipart Billing Tax URL Attached: ${dealUpdateFields['Billing_Tax_Copy']}`);
       }
 
       console.log(`📡 Streaming integrated surveyor data live to Zoho Deals profile: ${dealId}`);
@@ -302,7 +375,6 @@ export const addForm = async (c) => {
     }
   }
 };
-
 
 export const updateForm = async (c) => {
   try {
