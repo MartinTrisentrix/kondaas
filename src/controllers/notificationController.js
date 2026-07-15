@@ -233,18 +233,6 @@ export const triggerScenarioNotification = async (c) => {
       // --- STEP 2: SCENARIO 4 HEAVY BACKGROUND TREE & POLL EXECUTION ---
       if (Number(scenarioType) === 4) {
         
-        // 📊 NEW: Fire interactive satisfaction rating poll instantly!
-        const pollResult = await db.collection("notifications").insertOne({
-          from: "Kondaas_System",
-          to: whatsappTo,
-          mode: "whatsapp",
-          content: new Binary(Buffer.from("Rate our service", 'utf8')),
-          contentType: "poll",
-          status: "pending",
-          createdAt: new Date()
-        });
-        processWhatsAppNotification(pollResult.insertedId).catch(err => console.error(err));
-
         // Background PDF & Sync compilation block remains isolated here
         (async () => {
           try {
@@ -333,6 +321,7 @@ export const triggerScenarioNotification = async (c) => {
               if (err) console.error("❌ Error deleting local temporary invoice PDF:", err.message);
             });
 
+            // 📄 Dispatch Invoice PDF Notification
             const pdfResult = await db.collection("notifications").insertOne({
               from: "Kondaas_System",
               to: whatsappTo,
@@ -344,6 +333,19 @@ export const triggerScenarioNotification = async (c) => {
               createdAt: new Date()
             });
             processWhatsAppNotification(pdfResult.insertedId).catch(err => console.error(err));
+
+            // 📊 🎯 MOVED TO THE LAST STEP: Fire interactive satisfaction rating poll safely here!
+            console.log("📊 Sending customer satisfaction rating poll feedback interface...");
+            const pollResult = await db.collection("notifications").insertOne({
+              from: "Kondaas_System",
+              to: whatsappTo,
+              mode: "whatsapp",
+              content: new Binary(Buffer.from("Rate our service", 'utf8')),
+              contentType: "poll",
+              status: "pending",
+              createdAt: new Date()
+            });
+            processWhatsAppNotification(pollResult.insertedId).catch(err => console.error(err));
 
           } catch (pdfErr) {
             console.error("❌ Background PDF Document Tree Generation Failed:", pdfErr);
