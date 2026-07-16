@@ -743,7 +743,24 @@ export const zohoWorkflowAssignment = async (c) => {
     const referred_by = payload.referred_by || null;
     const Site_Survey_Req_Date_Time = payload.Site_Survey_Req_Date_Time || null;
     const comment = payload.comment || "Assigned via Zoho CRM Automated Field Update";
+    const leadSource = payload.Lead_Source || null;
 
+    // ⚡ SMART PARSING WORKAROUND FOR COMBINED ZOHO FIELD:
+    let CreatedBy = null;
+    let District = null;
+    const rawCreatedBy = payload.Created_By || null;
+
+    if (rawCreatedBy) {
+      if (rawCreatedBy.includes('&District=')) {
+        const parts = rawCreatedBy.split('&District=');
+        CreatedBy = parts[0] ? parts[0].trim() : null;
+        District = parts[1] ? parts[1].trim() : null;
+      } else {
+        // Fallback case if Zoho somehow sends only Created_By cleanly later
+        CreatedBy = rawCreatedBy.trim();
+        District = payload.District || null; 
+      }
+    }
 
     const productType = payload.Product_Type || null;
     const orderType = payload.Order_Type || null;
@@ -801,7 +818,12 @@ export const zohoWorkflowAssignment = async (c) => {
         siteSurveyStatus: "notassigned",
         assignedTo: surveyorNumber,
         assignedAt: new Date().toISOString(),
+        leadSource: leadSource,
         
+        // 🎯 Storing the beautifully cleaned and separated strings:
+        CreatedBy: CreatedBy,
+        District: District,
+
         productType: productType,
         orderType: orderType,
         projectType: projectType,
