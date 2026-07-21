@@ -6,33 +6,87 @@ import admin from 'firebase-admin';
 // 🌐 Global Production Database Configuration Connection Key
 const MONGODB_URI = process.env.MONGODB_URI;
 
+/**
+ * Returns current Date components evaluated specifically in India Time (Asia/Kolkata)
+ */
+const getIndiaDateParts = (date = new Date()) => {
+  const options = { timeZone: 'Asia/Kolkata', hour12: false };
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    ...options,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
+  const parts = formatter.formatToParts(date);
+  const map = {};
+  parts.forEach(p => { if (p.type !== 'literal') map[p.type] = p.value; });
+
+  return {
+    year: parseInt(map.year, 10),
+    month: parseInt(map.month, 10) - 1, // 0-indexed
+    day: parseInt(map.day, 10),
+    hour: parseInt(map.hour, 10),
+    minute: parseInt(map.minute, 10),
+    second: parseInt(map.second, 10)
+  };
+};
+
+/**
+ * Helper to build an absolute UTC Date instance corresponding to target IST parameters
+ */
+const createISTDate = (year, month, day, hours = 20, minutes = 0, seconds = 0) => {
+  // IST is UTC + 5 hours 30 minutes
+  const pad = (num) => String(num).padStart(2, '0');
+  const monthStr = pad(month + 1);
+  const dayStr = pad(day);
+  const hourStr = pad(hours);
+  const minStr = pad(minutes);
+  const secStr = pad(seconds);
+
+  // ISO string forced to +05:30 timezone
+  return new Date(`${year}-${monthStr}-${dayStr}T${hourStr}:${minStr}:${secStr}+05:30`);
+};
+
 const getNextSunday8PM = () => {
   const now = new Date();
-  const resultDate = new Date(now);
+  const india = getIndiaDateParts(now);
 
-  const currentDay = now.getDay();
-  const daysUntilSunday = (7 - currentDay) % 7;
+  // Determine current day of week in India (0 = Sunday, 1 = Monday, etc.)
+  const indiaDateObj = new Date(Date.UTC(india.year, india.month, india.day));
+  const currentDay = indiaDateObj.getUTCDay();
   
-  resultDate.setDate(now.getDate() + daysUntilSunday);
-  resultDate.setHours(20, 0, 0, 0);
+  let daysUntilSunday = (7 - currentDay) % 7;
+  
+  let targetYear = india.year;
+  let targetMonth = india.month;
+  let targetDay = india.day + daysUntilSunday;
 
-  // If it's already Sunday past 8:00 PM, move to the next week's Sunday
-  if (resultDate <= now) {
-    resultDate.setDate(resultDate.getDate() + 7);
+  let targetISTDate = createISTDate(targetYear, targetMonth, targetDay, 20, 0, 0);
+
+  // If today is Sunday and past 8:00 PM IST, move to next week's Sunday
+  if (targetISTDate <= now) {
+    targetISTDate = createISTDate(targetYear, targetMonth, targetDay + 7, 20, 0, 0);
   }
 
-  return resultDate;
+  return targetISTDate;
 };
 
 const getNextMonthEnd8PM = () => {
   const now = new Date();
-  
-  // Find the last day of the current month
-  const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 20, 0, 0, 0);
+  const india = getIndiaDateParts(now);
 
-  // If we have already passed the 8 PM mark on the last day of this month, target the next month's end
+  // Get last day of current month in IST
+  const lastDayOfCurrentMonth = new Date(Date.UTC(india.year, india.month + 1, 0)).getUTCDate();
+  let currentMonthEnd = createISTDate(india.year, india.month, lastDayOfCurrentMonth, 20, 0, 0);
+
+  // If already past 8:00 PM IST on the last day of this month, target next month's end
   if (currentMonthEnd <= now) {
-    return new Date(now.getFullYear(), now.getMonth() + 2, 0, 20, 0, 0, 0);
+    const lastDayOfNextMonth = new Date(Date.UTC(india.year, india.month + 2, 0)).getUTCDate();
+    currentMonthEnd = createISTDate(india.year, india.month + 1, lastDayOfNextMonth, 20, 0, 0);
   }
 
   return currentMonthEnd;
@@ -105,17 +159,18 @@ export const processAllCustomersWeeklyJobs = async (db, masterJob) => {
     
     console.log(`📋 Found ${users.length} customer users with registered devices for Weekly Report.`);
 
-    const today = new Date();
-    const currentDay = today.getDay();
-    const distanceToMonday = currentDay === 0 ? -6 : 1 - currentDay;
-    
-    const monday = new Date(today);
-    monday.setDate(today.getDate() + distanceToMonday);
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
+    const now = new Date();
+    const india = getIndiaDateParts(now);
 
-    const startTime = monday.toISOString().split('T')[0]; 
-    const endTime = sunday.toISOString().split('T')[0];
+    const indiaDateObj = new Date(Date.UTC(india.year, india.month, india.day));
+    const currentDay = indiaDateObj.getUTCDay();
+    const distanceToMonday = currentDay === 0 ? -6 : 1 - currentDay;
+
+    const mondayDate = new Date(Date.UTC(india.year, india.month, india.day + distanceToMonday));
+    const sundayDate = new Date(Date.UTC(mondayDate.getUTCFullYear(), mondayDate.getUTCMonth(), mondayDate.getUTCDate() + 6));
+
+    const startTime = mondayDate.toISOString().split('T')[0]; 
+    const endTime = sundayDate.toISOString().split('T')[0];
 
     for (const user of users) {
       const phoneNo = user._id;
@@ -213,7 +268,7 @@ export const processAllCustomersWeeklyJobs = async (db, masterJob) => {
       }
     }
 
-    // 🎯 CALENDAR UPDATE: Calculate exact upcoming Sunday at 8 PM
+    // 🎯 CALENDAR UPDATE: Calculate exact upcoming Sunday at 8 PM IST
     const nextRunTime = getNextSunday8PM(); 
 
     await db.collection("jobs_queue").updateOne(
@@ -241,11 +296,12 @@ export const processAllCustomersMonthlyJobs = async (db, masterJob) => {
     
     console.log(`📋 Found ${users.length} customer users with registered devices for Monthly Summary.`);
 
-    const today = new Date();
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const now = new Date();
+    const india = getIndiaDateParts(now);
 
-    const startTime = startOfMonth.toISOString().split('T')[0]; 
-    const endTime = today.toISOString().split('T')[0];
+    const pad = (num) => String(num).padStart(2, '0');
+    const startTime = `${india.year}-${pad(india.month + 1)}-01`; 
+    const endTime = `${india.year}-${pad(india.month + 1)}-${pad(india.day)}`;
 
     for (const user of users) {
       const phoneNo = user._id;
@@ -343,7 +399,7 @@ export const processAllCustomersMonthlyJobs = async (db, masterJob) => {
       }
     }
 
-    // 🎯 CALENDAR UPDATE: Calculate exact month-end date at 8 PM
+    // 🎯 CALENDAR UPDATE: Calculate exact month-end date at 8 PM IST
     const nextRunTime = getNextMonthEnd8PM(); 
 
     await db.collection("jobs_queue").updateOne(
