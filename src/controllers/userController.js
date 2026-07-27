@@ -61,40 +61,31 @@ export const addForm = async (c) => {
     const uploadedFileUrls = {};
 
     // -------------------------------------------------------------------------
-    // 🎯 100% DYNAMIC FILE LOOP PROCESSOR: No hardcoded array fields!
+    // 🎯 100% DYNAMIC FILE LOOP PROCESSOR
     // -------------------------------------------------------------------------
     for (const fieldName of Object.keys(body)) {
       const rawValue = body[fieldName];
       if (!rawValue) continue;
 
-      // Normalize into array formatting to seamlessly evaluate all fields
       const valuesArray = Array.isArray(rawValue) ? rawValue : [rawValue];
-
-      // Filter out any native text inputs; we only look for objects that behave like uploaded files
       const filesArray = valuesArray.filter(val => val && typeof val === 'object' && 'name' in val);
       if (filesArray.length === 0) continue;
 
       for (let i = 0; i < filesArray.length; i++) {
         const file = filesArray[i];
         if (file && file.name) {
-          // 📁 Step A: Determine correct destination folder name parameters dynamically
           const targetFolderName = (fieldName === "EB_Bill_Copy") ? "last 6 month EBbill" : "site";
-          
-          // 🎯 FIXED: Now tracking the third state argument dynamically for regional folder synchronization!
           const targetFolderId = await getOrCreateLeadsSEFolder(dealId, targetFolderName, dataFields.state);
 
-          // 💾 Step B: Build localized temp file path and enforce clean field-based file naming rules
           const ext = path.extname(file.name) || '.jpg';
           const customFileName = filesArray.length > 1 ? `${fieldName}_${i + 1}${ext}` : `${fieldName}${ext}`;
           const tempPath = path.join(uploadDir, `temp_${dealId}_${fieldName}_${i}_${Date.now()}${ext}`);
 
           temporaryFilesToClean.push(tempPath);
 
-          // Write file binary buffer to local disk space temporarily
           fs.writeFileSync(tempPath, Buffer.from(await file.arrayBuffer()));
           console.log(`🎬 Streaming dynamic asset [${fieldName}] directly to Zoho WorkDrive Folder: [${targetFolderName}] for state [${dataFields.state || 'N/A'}]`);
 
-          // 📡 Step C: Pass the custom target filename directly into your upload utility helper
           const url = await uploadToZohoWorkDrive(tempPath, customFileName, targetFolderId);
 
           if (!uploadedFileUrls[fieldName]) {
@@ -113,9 +104,42 @@ export const addForm = async (c) => {
         return c.json({ error: "Mobile number already registered!" }, 400);
       }
 
+      // 🔍 Fetch ServiceAgentName from deals collection using deal_id
+      const dealRecord = await db.collection("deals").findOne({ deal_id: dealId });
+      const serviceAgentName = dealRecord?.ServiceAgentName || dealRecord?.serviceAgentName || null;
+
+      // -----------------------------------------------------------------------
+      // 🏷️ DYNAMIC STATE-BASED AUTO-INCREMENT REPORT NUMBER GENERATOR
+      // -----------------------------------------------------------------------
+      const stateRaw = String(dataFields.state || '').trim().toLowerCase();
+      let statePrefix = 'GEN_SUR';
+      let counterId = 'report_seq_gen';
+
+      if (stateRaw.includes('tn') || stateRaw.includes('tamil')) {
+        statePrefix = 'TN_SUR';
+        counterId = 'report_seq_tn';
+      } else if (stateRaw.includes('kl') || stateRaw.includes('kerala')) {
+        statePrefix = 'KL_SUR';
+        counterId = 'report_seq_kl';
+      }
+
+      // Atomic counter increment using MongoDB findOneAndUpdate
+      const counterResult = await db.collection("counters").findOneAndUpdate(
+        { _id: counterId },
+        { $inc: { seq: 1 } },
+        { upsert: true, returnDocument: 'after' }
+      );
+
+      const generatedReportNumber = `${statePrefix}_${counterResult.seq}`;
+      console.log(`🏷️ Generated Sequential Report Number: ${generatedReportNumber}`);
+
+      // -----------------------------------------------------------------------
+
       const finalDocument = {
         deal_id: dealId,
         mobileNumber,
+        ServiceAgentName: serviceAgentName,
+        Report_Number: generatedReportNumber, // 👈 Saved only to local MongoDB forms
         ...dataFields,
         uploadedMediaUrls: uploadedFileUrls,
         createdAt: new Date().toISOString()
@@ -126,7 +150,6 @@ export const addForm = async (c) => {
 
       const zohoToken = await getZohoAccessToken(db);
 
-      // Lookup templates data logic safely
       const schemaConfig = await db.collection("templates").findOne({ id: "solarv1" });
       const registeredProperties = schemaConfig?.schema?.properties || {};
 
@@ -136,12 +159,11 @@ export const addForm = async (c) => {
 
       // Extract field parameters passed by surveyor
       for (const [key, value] of Object.entries(dataFields)) {
-        // 🛡️ CRITICAL BYPASS: Skip processing these entirely inside this loop to prevent data/type overwrites!
         if (
           key === 'Advance_Payment_Screenshot' || 
           key === 'Bank_Passbook_Copy' || 
           key === 'Billing_Tax_Copy' ||
-          key === 'Report_Number' ||            // 📑 EXCLUDE FROM AUTO-NUMBER CASTING
+          key === 'Report_Number' || 
           key === 'report_number'
         ) {
           continue;
@@ -157,7 +179,6 @@ export const addForm = async (c) => {
           const normalizedValue = typeof value === 'string' ? value.trim().toLowerCase() : value;
           const fieldDefinition = registeredProperties[key] || {};
 
-          // 🖼️ Case A: Base64 signature converter layout
           if (
             fieldDefinition.format === 'data-url' &&
             typeof value === 'string' &&
@@ -185,7 +206,6 @@ export const addForm = async (c) => {
               console.error(`⚠️ Failed to process base64 signature layout field configuration for ${key}:`, err.message);
             }
           }
-          // 🎛️ Case B: Dynamic Boolean Casting Engine via JSON-Schema Rules
           else if (fieldDefinition.type === 'boolean') {
             dealUpdateFields[key] = (
               value === true ||
@@ -195,7 +215,6 @@ export const addForm = async (c) => {
               normalizedValue === 'required'
             );
           }
-          // 📞 Case C: Phone Sanitizer Check
           else if (fieldDefinition.pattern || key === 'Mobile' || key === 'Site_Engineer_Contact') {
             let digitsOnly = String(value).replace(/\D/g, '');
             if (digitsOnly.length === 12 && digitsOnly.startsWith('91')) {
@@ -203,11 +222,9 @@ export const addForm = async (c) => {
             }
             dealUpdateFields[key] = digitsOnly;
           }
-          // 🛑 Case D: EXCLUSION FILTER: Keep Latitude/Longitude as pure strings
           else if (key === 'Latitude' || key === 'Longitude') {
             dealUpdateFields[key] = String(value).trim();
           }
-          // ⚙️ Case E: Numbers & Integer auto-casting parameters
           else if (typeof value === 'number') {
             if (key === 'Consumer_Number') {
               dealUpdateFields[key] = Math.trunc(value);
@@ -234,13 +251,6 @@ export const addForm = async (c) => {
       }
 
       dealUpdateFields['Consumer_Number'] = parseInt(String(dealUpdateFields['Consumer_Number'] ?? '').trim(), 10) || 0;
-
-      // 📑 STRICT FORMAT ENFORCEMENT: Explicitly sanitizing Report Number field layout as a string
-      const rawReportNum = dataFields.Report_Number || dataFields.report_number;
-      if (rawReportNum !== undefined && rawReportNum !== null) {
-        dealUpdateFields['Report_Number'] = String(rawReportNum).trim();
-        console.log(`📑 Enforcing String format for Report Number: "${dealUpdateFields['Report_Number']}"`);
-      }
 
       // 🖼️ 1. ADVANCE PAYMENT SCREENSHOT PROCESSING LAYER
       const screenshotString = dataFields.Advance_Payment_Screenshot;
@@ -357,7 +367,8 @@ export const addForm = async (c) => {
 
       return c.json({
         success: true,
-        message: "Form saved locally and pushed cleanly to Zoho CRM layout workspace!"
+        message: "Form saved locally and pushed cleanly to Zoho CRM layout workspace!",
+        reportNumber: generatedReportNumber
       }, 201);
     });
 

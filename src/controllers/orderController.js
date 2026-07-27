@@ -737,29 +737,50 @@ export const zohoWorkflowAssignment = async (c) => {
     const email = payload.Email || payload.customer_email || null;
     const city = payload.city || null;
     const state = payload.state || null;
-    const address = payload.address || null;
+    const street = payload.Street || null;
     const latitude = payload.latitude || null;
     const longitude = payload.longitude || null;
     const referred_by = payload.referred_by || null;
     const Site_Survey_Req_Date_Time = payload.Site_Survey_Req_Date_Time || null;
     const comment = payload.comment || "Assigned via Zoho CRM Automated Field Update";
-    const leadSource = payload.Lead_Source || null;
+    const Service_Agent_Name = payload.Service_Agent_Name || null;
 
     // ⚡ SMART PARSING WORKAROUND FOR COMBINED ZOHO FIELD:
     let CreatedBy = null;
     let District = null;
+    let SubDistrict = null;
+    let GoogleLocation = null;
+    let leadSource = null;
+    let postalCode = null;
+    let country = null;
+
     const rawCreatedBy = payload.Created_By || null;
 
     if (rawCreatedBy) {
-      if (rawCreatedBy.includes('&District=')) {
-        const parts = rawCreatedBy.split('&District=');
-        CreatedBy = parts[0] ? parts[0].trim() : null;
-        District = parts[1] ? parts[1].trim() : null;
+      if (rawCreatedBy.includes('&')) {
+        // Prepend 'CreatedBy=' so standard URLSearchParams can parse all sub-parameters seamlessly
+        const parsedParams = new URLSearchParams(`CreatedBy=${rawCreatedBy.trim()}`);
+
+        CreatedBy = parsedParams.get('CreatedBy')?.trim() || null;
+        District = parsedParams.get('District')?.trim() || null;
+        SubDistrict = parsedParams.get('Sub_District')?.trim() || null;
+        GoogleLocation = parsedParams.get('Google_Location')?.trim() || null;
+        postalCode = parsedParams.get('postal_code')?.trim() || null;
+        country = parsedParams.get('country')?.trim() || null;
+        leadSource = parsedParams.get('lead_Source')?.trim() || parsedParams.get('leadSource')?.trim() || null;
       } else {
-        // Fallback case if Zoho somehow sends only Created_By cleanly later
+        // Fallback case if Zoho sends un-bundled standard text
         CreatedBy = rawCreatedBy.trim();
-        District = payload.District || null; 
+        District = payload.District?.trim() || null; 
+        SubDistrict = payload.Sub_District?.trim() || null;
+        GoogleLocation = payload.Google_Location?.trim() || null;
+        postalCode = payload.postal_code?.trim() || null;
+        country = payload.country?.trim() || null;
+        leadSource = payload.lead_Source?.trim() || payload.leadSource?.trim() || null;
       }
+    } else {
+      // Direct payload fallback if Created_By is missing entirely
+      leadSource = payload.lead_Source?.trim() || payload.leadSource?.trim() || null;
     }
 
     const productType = payload.Product_Type || null;
@@ -772,7 +793,6 @@ export const zohoWorkflowAssignment = async (c) => {
     const solarPanelBrand = payload.Solar_Panel_Brand || null;
     const noOfPanels = payload.No_of_Panels || null;
     const roofType = payload.Roof_Type || null;
-
 
     const siteEngineerContact = payload.site_engineer_contact || payload.Site_Engineer_Contact;
 
@@ -809,7 +829,7 @@ export const zohoWorkflowAssignment = async (c) => {
         whatsappNo: cleanWhatsappNo,
         email: email,
         city: city,
-        address: address,
+        street: street,
         latitude: latitude,
         longitude: longitude,
         comment: comment,
@@ -819,11 +839,14 @@ export const zohoWorkflowAssignment = async (c) => {
         assignedTo: surveyorNumber,
         assignedAt: new Date().toISOString(),
         leadSource: leadSource,
-        state:state,
-        
-        
+        state: state,
+        postalCode: postalCode,
+        country: country,
         CreatedBy: CreatedBy,
         District: District,
+        ServiceAgentName: Service_Agent_Name,
+        SubDistrict: SubDistrict,
+        GoogleLocation: GoogleLocation,
 
         productType: productType,
         orderType: orderType,
@@ -871,7 +894,7 @@ export const zohoWorkflowAssignment = async (c) => {
       }
 
       if (surveyorTokens.length > 0) {
-        const structuredBody = `👤 Name : ${name || 'N/A'}\n📍 Address : ${address || 'N/A'}}`;
+        const structuredBody = `👤 Name : ${name || 'N/A'}\n📍 Address : ${street || 'N/A'}`;
 
         const message = {
           notification: {
@@ -907,12 +930,12 @@ export const zohoWorkflowAssignment = async (c) => {
             click_action: "FLUTTER_NOTIFICATION_CLICK",
             type: "ASSIGNMENT",
             customer_name: name || "",
-            customer_mobile: cleanMobile || "",      // Sent clean to frontend
-            customer_address: address || "",
+            customer_mobile: cleanMobile || "",
+            customer_address: street || "",
             leadId: String(id),
-            customerMobile: cleanMobile || "",      // Sent clean to frontend
+            customerMobile: cleanMobile || "",
             customerName: name || "",
-            address: address || "",
+            address: street || "",
           },
           tokens: surveyorTokens,
         };

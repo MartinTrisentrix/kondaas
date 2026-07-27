@@ -58,18 +58,28 @@ const getNextSunday8PM = () => {
   // Determine current day of week in India (0 = Sunday, 1 = Monday, etc.)
   const indiaDateObj = new Date(Date.UTC(india.year, india.month, india.day));
   const currentDay = indiaDateObj.getUTCDay();
-  
+
   let daysUntilSunday = (7 - currentDay) % 7;
-  
-  let targetYear = india.year;
-  let targetMonth = india.month;
-  let targetDay = india.day + daysUntilSunday;
 
-  let targetISTDate = createISTDate(targetYear, targetMonth, targetDay, 20, 0, 0);
+  // Use JavaScript Date object to handle month/year roll-over safely
+  let targetDate = new Date(Date.UTC(india.year, india.month, india.day + daysUntilSunday));
 
-  // If today is Sunday and past 8:00 PM IST, move to next week's Sunday
+  let targetISTDate = createISTDate(
+    targetDate.getUTCFullYear(),
+    targetDate.getUTCMonth(),
+    targetDate.getUTCDate(),
+    20, 0, 0
+  );
+
+  // If today is Sunday and past 8:00 PM IST, move to next week's Sunday (+7 days)
   if (targetISTDate <= now) {
-    targetISTDate = createISTDate(targetYear, targetMonth, targetDay + 7, 20, 0, 0);
+    targetDate.setUTCDate(targetDate.getUTCDate() + 7);
+    targetISTDate = createISTDate(
+      targetDate.getUTCFullYear(),
+      targetDate.getUTCMonth(),
+      targetDate.getUTCDate(),
+      20, 0, 0
+    );
   }
 
   return targetISTDate;

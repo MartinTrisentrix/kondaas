@@ -242,7 +242,7 @@ export const triggerScenarioNotification = async (c) => {
             }
 
             console.log(`📄 Fetching forms record for clean mobile: ${cleanedCustomerMobile}...`);
-            const formData = await db.collection("forms").findOne({ mobileNumber: cleanedCustomerMobile || customerMobile  });
+            const formData = await db.collection("forms").findOne({ WhatsApp_Number: cleanedCustomerMobile || customerMobile  });
 
             if (!formData) {
               console.error(`❌ Document Generation Cancelled: No form entry found for mobile: ${cleanedCustomerMobile}`);
@@ -250,7 +250,7 @@ export const triggerScenarioNotification = async (c) => {
             }
 
             formData.deal_id = deal_id;
-            formData.Report_Number = `KON-SRV-${new Date().getFullYear()}-${String(deal_id).slice(-4).toUpperCase()}`;
+            
             formData.Site_Survey_Requested_Date_Time = new Date().toISOString();
 
             console.log("🛠️ Compiling Technical Survey Report PDF...");

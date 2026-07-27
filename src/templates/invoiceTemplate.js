@@ -179,12 +179,16 @@ export const getInvoiceTemplate = (lead) => {
 // RAW survey form data 
 export const getSurveyReportTemplate = (formData) => {
   const d = formData || {};
-  
-  const currentYear = new Date().getFullYear();
-  const displayDate = d.Site_Survey_Requested_Date_Time ? new Date(d.Site_Survey_Requested_Date_Time).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-  const displayTime = d.Site_Survey_Requested_Date_Time ? new Date(d.Site_Survey_Requested_Date_Time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-  
-  const reportNumber = d.Report_Number ? d.Report_Number : (d.deal_id ? `KON-SRV-${currentYear}-${String(d.deal_id).slice(-4).toUpperCase()}` : `KON-SRV-${currentYear}-TEMP`);
+
+  const displayDate = d.Site_survey_Completed_Date_Time
+    ? new Date(d.Site_survey_Completed_Date_Time).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
+  const displayTime = d.Site_survey_Completed_Date_Time
+    ? new Date(d.Site_survey_Completed_Date_Time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+    : new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+  const reportNumber = d.Report_Number || 'N/A';
 
   const getStatusBadge = (val) => {
     const cleanStr = String(val || '').trim().toLowerCase();
@@ -196,6 +200,12 @@ export const getSurveyReportTemplate = (formData) => {
     }
     return val || 'N/A';
   };
+
+  const money = (v) => `₹${Number(v || 0).toLocaleString('en-IN')}`;
+
+  const computedNetDue = d.Plant_Cost_After_Subsidy != null
+    ? d.Plant_Cost_After_Subsidy
+    : (Number(d.Total_Plant_Cost || 0) - Number(d.Subsidy || 0) + Number(d.Additional_EB_Charges || 0) + Number(d.Additional_Structure_Cost || 0));
 
   return `
   <!DOCTYPE html>
@@ -305,19 +315,6 @@ export const getSurveyReportTemplate = (formData) => {
         color: #202124;
         width: 25%;
       }
-      .checklist-table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-      .checklist-table td {
-        padding: 6px 10px;
-        border: 1px solid #e0e0e0;
-        width: 25%;
-      }
-      .checklist-table td.label {
-        color: #444;
-        background-color: #fafafa;
-      }
       .pricing-highlight {
         background-color: #f8f9fa;
         border: 1px solid #dadce0;
@@ -406,245 +403,330 @@ export const getSurveyReportTemplate = (formData) => {
     </table>
 
     <div class="section-block">
-      <div class="section-title">1. Customer & Surveyor Profiles</div>
+      <div class="section-title">1. Customer Contact Details</div>
       <table class="data-table">
         <tr>
-          <td class="label">Customer Name</td>
-          <td class="value">${d.Consumer_Name || 'N/A'}</td>
-          <td class="label">Site Engineer</td>
-          <td class="value">${d.Assigned_To || 'N/A'}</td>
+          <td class="label">Deal Name</td>
+          <td class="value">${d.Deal_Name || 'N/A'}</td>
+          <td class="label">Lead Source</td>
+          <td class="value">${d.Lead_Source || 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">Customer Contact</td>
-          <td class="value">${d.Mobile || 'N/A'}</td>
-          <td class="label">Engineer Contact</td>
-          <td class="value">${d.Site_Engineer_Contact || 'N/A'}</td>
+          <td class="label">Mobile Number</td>
+          <td class="value">${d.Mobile_Number || 'N/A'}</td>
+          <td class="label">Phone Number</td>
+          <td class="value">${d.Phone_Number || 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">Site Coordinates</td>
-          <td class="value" colspan="3">
-            Lat: ${d.Latitude || 'N/A'}, Lng: ${d.Longitude || 'N/A'} 
-            ${d.GPS_Accuracy ? `(Accuracy: ${d.GPS_Accuracy}m)` : ''}
-          </td>
+          <td class="label">WhatsApp Number</td>
+          <td class="value">${d.WhatsApp_Number || 'N/A'}</td>
+          <td class="label">Referred By</td>
+          <td class="value">${d.Referred_By || 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">Site Address</td>
-          <td class="value" colspan="3">${d.Street_Address || 'N/A'}, ${d.City || 'N/A'}, ${d.State_Province || 'N/A'}</td>
+          <td class="label">Site Survey Assigned By</td>
+          <td class="value">${d.Site_Survey_Assigned_By || 'N/A'}</td>
+          <td class="label">Service Agent's Name</td>
+          <td class="value">${d.ServiceAgentName || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td class="label">Site Engineer Contact</td>
+          <td class="value" colspan="3">${d.Site_Engineer_Contact || 'N/A'}</td>
         </tr>
       </table>
     </div>
 
     <div class="section-block">
-      <div class="section-title">2. Administrative & Design Parameters</div>
+      <div class="section-title">2. Address Information</div>
       <table class="data-table">
         <tr>
+          <td class="label">Country/Region</td>
+          <td class="value">${d.Country_Region || 'N/A'}</td>
+          <td class="label">State/Province</td>
+          <td class="value">${d.State_Province || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td class="label">District</td>
+          <td class="value">${d.District || 'N/A'}</td>
+          <td class="label">Sub District</td>
+          <td class="value">${d.Sub_District || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td class="label">City</td>
+          <td class="value">${d.City || 'N/A'}</td>
+          <td class="label">Postal Code</td>
+          <td class="value">${d.Zip_Postal_Code || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td class="label">Street</td>
+          <td class="value" colspan="3">${d.Street_Address || 'N/A'}</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title">3. EB Details</div>
+      <table class="data-table">
+        <tr>
+          <td class="label">EB Connection Under Contact Person</td>
+          <td class="value">${d.KSEB_Connection_Under_Contact_Person || 'N/A'}</td>
           <td class="label">Order Type</td>
           <td class="value">${d.Order_Type || 'N/A'}</td>
+        </tr>
+        <tr>
           <td class="label">Project Type</td>
           <td class="value">${d.Project_Type || 'N/A'}</td>
-        </tr>
-        ${d.Created_By ? `
-        <tr>
-          <td class="label">Generated By</td>
-          <td class="value" colspan="3">${d.Created_By}</td>
-        </tr>` : ''}
-      </table>
-    </div>
-
-    <div class="section-block">
-      <div class="section-title">3. Electrical Connection Metadata</div>
-      <table class="data-table">
-        <tr>
-          <td class="label">Consumer Number</td>
-          <td class="value">${d.Consumer_Number || 'N/A'}</td>
           <td class="label">Consumer Name</td>
           <td class="value">${d.Consumer_Name || 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">Connection Status</td>
-          <td class="value">${d.Billing_Status || 'N/A'}</td>
-          <td class="label">Tariff Type</td>
-          <td class="value">${d.Tariff || 'N/A'}</td>
+          <td class="label">Consumer Number</td>
+          <td class="value">${d.Consumer_Number || 'N/A'}</td>
+          <td class="label">EB Connection Status</td>
+          <td class="value">${d.EB_Connection_Status || 'N/A'}</td>
         </tr>
         <tr>
+          <td class="label">Tariff</td>
+          <td class="value">${d.Tariff || 'N/A'}</td>
           <td class="label">Connection Type</td>
           <td class="value">${d.Connection_Type || 'N/A'}</td>
-          <td class="label">Connected Load</td>
-          <td class="value">${d.Connected_Load ? d.Connected_Load + ' kW' : 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">Name Change Required?</td>
-          <td class="value">${getStatusBadge(d.Name_Change_In_EB_Bill)}</td>
-          <td class="label">Transformer Capacity</td>
+          <td class="label">Connected Load</td>
+          <td class="value">${d.Connected_Load ? d.Connected_Load + ' kW' : 'N/A'}</td>
+          <td class="label">Balance Transformer Capacity Available</td>
           <td class="value">${d.Balance_Transformer_Capacity || 'N/A'}</td>
         </tr>
       </table>
     </div>
 
     <div class="section-block">
-      <div class="section-title">4. Primary Technology Preferences</div>
+      <div class="section-title">4. Product Information</div>
       <table class="data-table">
         <tr>
-          <td class="label">Inverter Type</td>
-          <td class="value">${d.Inverter_Brand || 'N/A'}</td>
-          <td class="label">Inv. Connection</td>
+          <td class="label">Project Model</td>
+          <td class="value">${d.Project_Model || 'N/A'}</td>
+          <td class="label">Inverter Connection Type</td>
           <td class="value">${d.Inverter_Connection_Type || 'N/A'}</td>
         </tr>
         <tr>
           <td class="label">Inverter Capacity</td>
           <td class="value">${d.Inverter_Capacity ? d.Inverter_Capacity + ' kW' : 'N/A'}</td>
-          <td class="label">Solar Panel Type</td>
+          <td class="label">Solar Panel Model</td>
           <td class="value">${d.Solar_Panel_Model || 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">Number of Panels</td>
-          <td class="value" colspan="3">${d.No_of_Panels ? d.No_of_Panels + ' Qty' : 'N/A'}</td>
+          <td class="label">Solar Panel Brand</td>
+          <td class="value">${d.Solar_Panel_Brand || 'N/A'}</td>
+          <td class="label">No of Panels</td>
+          <td class="value">${d.No_of_Panels || 'N/A'}</td>
         </tr>
       </table>
     </div>
 
     <div class="section-block">
-      <div class="section-title">5. Structural & Roof Feasibilities</div>
+      <div class="section-title">5. Structure Details</div>
       <table class="data-table">
         <tr>
-          <td class="label">North to South Space</td>
-          <td class="value">${d.North_to_South_Space_Available_in_meters ? d.North_to_South_Space_Available_in_meters + ' meters' : 'N/A'}</td>
-          <td class="label">West to East Space</td>
-          <td class="value">${d.West_to_East_Space_Available_meters ? d.West_to_East_Space_Available_meters + ' meters' : 'N/A'}</td>
+          <td class="label">North to South Space Available (meters)</td>
+          <td class="value">${d.North_to_South_Space_Available_in_meters || 'N/A'}</td>
+          <td class="label">West to East Space Available (meters)</td>
+          <td class="value">${d.West_to_East_Space_Available_meters || 'N/A'}</td>
         </tr>
         <tr>
           <td class="label">Structure Type</td>
           <td class="value">${d.Structure_Type || 'N/A'}</td>
+          <td class="label">Ready Made Structure Fixing Model</td>
+          <td class="value">${d.Ready_Made_Structure_Fixing_Model || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td class="label">Solar Panel Mounting Structure Type</td>
+          <td class="value" colspan="3">${d.Solar_Panel_Mounting_Structure_Type || 'N/A'}</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title">6. Roof & Safety Details</div>
+      <table class="data-table">
+        <tr>
+          <td class="label">Building Height Profile</td>
+          <td class="value">${d.Building_Height_Profile || 'N/A'}</td>
           <td class="label">Roof Type</td>
           <td class="value">${d.Roof_Type || 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">Roof Condition</td>
+          <td class="label">Roof Access Available?</td>
+          <td class="value">${getStatusBadge(d.Roof_Access_Available)}</td>
+          <td class="label">Roof Surface Physical Condition</td>
           <td class="value">${d.Roof_Surface_Physical_Condition || 'N/A'}</td>
-          <td class="label">Building Height Profile</td>
-          <td class="value">${d.Building_Height_Profile || 'N/A'}</td>
         </tr>
+        <tr>
+          <td class="label">Walkway</td>
+          <td class="value">${getStatusBadge(d.Walkway)}</td>
+          <td class="label">Ladder</td>
+          <td class="value">${getStatusBadge(d.Ladder)}</td>
+        </tr>
+        <tr>
+          <td class="label">Required Ladder Length</td>
+          <td class="value">${d.Required_Ladder_Length || 'N/A'}</td>
+          <td class="label">Sliding Door</td>
+          <td class="value">${getStatusBadge(d.Sliding_Door)}</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title">7. Cable Requirements</div>
+      <table class="data-table">
+        <tr>
+          <td class="label">Cable Requirements</td>
+          <td class="value" colspan="3">${d.Cable_Requirements || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td class="label">AC Cable</td>
+          <td class="value">${d.AC_Cable || 'N/A'}</td>
+          <td class="label">DC Cable</td>
+          <td class="value">${d.DC_Cable || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td class="label">Earthing Cable</td>
+          <td class="value">${d.Earthing_Cable || 'N/A'}</td>
+          <td class="label">LA Cable</td>
+          <td class="value">${d.LA_Cable || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td class="label">UG Cable</td>
+          <td class="value" colspan="3">${d.UG_Cable || 'N/A'}</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title">8. Shadow Analysis</div>
+      <table class="data-table">
         <tr>
           <td class="label">Shadow Possibility</td>
           <td class="value">${getStatusBadge(d.Shadow_Possibility)}</td>
-          <td class="label">Roof Access Available?</td>
-          <td class="value">${getStatusBadge(d.Roof_Access_Available)}</td>
+          <td class="label">Consumer Informed About Shadow Possibility</td>
+          <td class="value">${getStatusBadge(d.Consumer_Informed_About_Shadow_Possibility)}</td>
         </tr>
         <tr>
-          <td class="label">Ladder Requirement</td>
-          <td class="value">${getStatusBadge(d.Ladder)}</td>
-          <td class="label">Safety Walkway Req.</td>
-          <td class="value">${getStatusBadge(d.Walkway)}</td>
+          <td class="label">Shadow Analysis Remarks</td>
+          <td class="value" colspan="3">${d.Shadow_Analysis_Remarks || 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">Sliding Door Setup</td>
-          <td class="value" colspan="3">${getStatusBadge(d.Sliding_Door)}</td>
+          <td class="label">Nearby Tree</td>
+          <td class="value">${getStatusBadge(d.Nearby_Tree)}</td>
+          <td class="label">High Raised Water Tank</td>
+          <td class="value">${getStatusBadge(d.High_Raised_Water_Tank)}</td>
+        </tr>
+        <tr>
+          <td class="label">Stair Room / Lift Room</td>
+          <td class="value">${getStatusBadge(d.Stair_Room_Lift_Room)}</td>
+          <td class="label">Nearby High Buildings</td>
+          <td class="value">${getStatusBadge(d.Nearby_High_Buildings)}</td>
         </tr>
       </table>
     </div>
 
     <div class="section-block">
-      <div class="section-title">6. Detailed Cabling Feasibility Structure</div>
-      <div style="border: 1px solid #e0e0e0; padding: 10px; background-color: #fdfdfd;">
-        <strong>Cable Scope Assignment:</strong> ${d.Cable_Requirements || 'Standard BOM Cables Only'}<br>
-        <span style="color: #666; font-size: 11px; margin-top: 4px; display: inline-block;">
-          DC Cable Spec: ${d.DC_Cable || 'N/A'} | AC Cable Spec: ${d.AC_Cable || 'N/A'} | Earthing: ${d.Earthing_Cable || 'N/A'}
-        </span>
-      </div>
-    </div>
-
-    <div class="section-block">
-      <div class="section-title">7. Client Checklist Summary Status</div>
+      <div class="section-title">9. Document Verification</div>
       <table class="data-table">
         <tr>
-          <td class="label">Customer Docs Checked</td>
-          <td class="value">${d.Document_collected || 'N/A'}</td>
-          <td class="label">EB Documentation Status</td>
-          <td class="value">${d.EB_Documentation_Status || 'N/A'}</td>
+          <td class="label">Checked Subsidy Eligibility?</td>
+          <td class="value">${getStatusBadge(d.Checked_Subsidy_Eligibility)}</td>
+          <td class="label">Name Change In EB Bill</td>
+          <td class="value">${getStatusBadge(d.Name_Change_In_EB_Bill)}</td>
         </tr>
         <tr>
-          <td class="label">Shadow Informed to Customer?</td>
-          <td class="value">${getStatusBadge(d.Consumer_Informed_About_Shadow_Possibility)}</td>
-          <td class="label">EB Bill Name Change?</td>
+          <td class="label">Name Change in Bank</td>
+          <td class="value">${getStatusBadge(d.Name_Change_in_Bank)}</td>
+          <td class="label">Address Update In EB Bill</td>
           <td class="value">${getStatusBadge(d.Address_Update_In_EB_Bill)}</td>
         </tr>
         <tr>
-          <td class="label">Bank Name Correction?</td>
-          <td class="value">${getStatusBadge(d.Name_Change_in_Bank)}</td>
-          <td class="label">Connected Load Change?</td>
-          <td class="value">${getStatusBadge(d.Tariff_Change)}</td>
+          <td class="label">Address Update in Aadhar</td>
+          <td class="value">${getStatusBadge(d.Address_Update_in_Aadhar)}</td>
+          <td class="label">Connected Load Revise</td>
+          <td class="value">${getStatusBadge(d.Connected_Load_Revise)}</td>
+        </tr>
+        <tr>
+          <td class="label">Tariff Change</td>
+          <td class="value" colspan="3">${getStatusBadge(d.Tariff_Change)}</td>
         </tr>
       </table>
     </div>
 
     <div class="section-block">
-      <div class="section-title">8. Detailed Document Checklist</div>
-      <table class="checklist-table">
-        <tr>
-          <td class="label">Aadhar Card Copy</td>
-          <td>${getStatusBadge(d.Aadhar_Card)}</td>
-          <td class="label">Pan Card Copy</td>
-          <td>${getStatusBadge(d.Pan_Card)}</td>
-        </tr>
-        <tr>
-          <td class="label">EB Bill Copy</td>
-          <td>${getStatusBadge(d.EB_Bill_Copy)}</td>
-          <td class="label">Building Tax Copy</td>
-          <td>${getStatusBadge(d.Building_Tax_Copy)}</td>
-        </tr>
-      </table>
-    </div>
-
-    <div class="section-block">
-      <div class="section-title">9. Commercial Pricing & Payments Matrix</div>
-      <table class="data-table" style="margin-bottom: 5px;">
-        <tr>
-          <td class="label">Mode of Payment</td>
-          <td class="value"><strong>${d.Mode_of_Payment || 'N/A'}</strong></td>
-          <td class="label">Advance Booking Collected</td>
-          <td class="value">${getStatusBadge(d.Advance_payment_Received)}</td>
-        </tr>
-        <tr>
-          <td class="label">Product / Package Name</td>
-          <td class="value" colspan="3"><strong>${d.Product_Name || 'N/A'}</strong></td>
-        </tr>
-      </table>
-      
-      <div class="pricing-highlight">
-        <div class="pricing-row">
-          算 Total Plant Cost (System Standard Setup):</span>
-          <span>₹${Number(d.Total_Plant_Cost || 0).toLocaleString('en-IN')}</span>
-        </div>
-        <div class="pricing-row" style="color: #c5221f;">
-          <span>Government Subsidy Discount (-):</span>
-          <span>- ₹${Number(d.Subsidy_Amount || 0).toLocaleString('en-IN')}</span>
-        </div>
-        <div class="pricing-row">
-          <span>Additional EB / KSEB Charges:</span>
-          <span>₹${Number(d.Additional_EB_Charges || 0).toLocaleString('en-IN')}</span>
-        </div>
-        <div class="pricing-row">
-          <span>Additional Structure Charges:</span>
-          <span>₹${Number(d.Additional_Structure_Cost || 0).toLocaleString('en-IN')}</span>
-        </div>
-        <div class="pricing-row total">
-          <span>Calculated Cost After Subsidy (Net Due):</span>
-          <span>₹${Number(d.Plant_Cost_After_Subsidy || (Number(d.Total_Plant_Cost || 0) - Number(d.Subsidy_Amount || 0) + Number(d.Additional_EB_Charges || 0) + Number(d.Additional_Structure_Cost || 0))).toLocaleString('en-IN')}</span>
-        </div>
+      <div class="section-title">10. Site Survey Photos</div>
+      <div style="border: 1px solid #dadce0; padding: 12px; min-height: 40px; background-color: #fdfdfd; font-size: 11px; white-space: pre-line;">
+        ${'No critical installation risks noted at the time of site survey evaluation.'}
       </div>
     </div>
 
     <div class="section-block">
-      <div class="section-title">10. Field Observations & Technical Remarks</div>
-      <div style="border: 1px solid #dadce0; padding: 12px; min-height: 40px; background-color: #fdfdfd; font-size: 11px; white-space: pre-line;">
-        ${d.Site_Survey_Remarks || 'No critical installation risks noted at the time of site survey evaluation.'}
+      <div class="section-title">11. Payment Details</div>
+      <table class="data-table">
+        <tr>
+          <td class="label">Mode of Payment</td>
+          <td class="value"><strong>${d.Mode_of_Payment || 'N/A'}</strong></td>
+          <td class="label">Advance Payment Collection Status</td>
+          <td class="value">${getStatusBadge(d.Advance_Payment_Collection_Status)}</td>
+        </tr>
+        <tr>
+          <td class="label">Advance Paid Date</td>
+          <td class="value">${d.Advance_Paid_Date || 'N/A'}</td>
+          <td class="label">Advance Amount</td>
+          <td class="value">${d.Advanced_Paid != null ? money(d.Advanced_Paid) : 'N/A'}</td>
+        </tr>
+        <tr>
+          <td class="label">Advance Payment UTR</td>
+          <td class="value" colspan="3">${d.Advance_Payment_UTR || 'N/A'}</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title">12. Documents Collection Details</div>
+      <table class="data-table">
+        <tr>
+          <td class="label">Documents Collected Status</td>
+          <td class="value" colspan="3">${getStatusBadge(d.Documents_Collected_Status)}</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title">13. Subsidy & Pricing Information</div>
+      <div class="pricing-highlight">
+        <div class="pricing-row">
+          <span>Total Plant Cost:</span>
+          <span>${money(d.Total_Plant_Cost)}</span>
+        </div>
+        <div class="pricing-row" style="color: #c5221f;">
+          <span>Subsidy (-):</span>
+          <span>- ${money(d.Subsidy)}</span>
+        </div>
+        <div class="pricing-row">
+          <span>Additional Structure Cost:</span>
+          <span>${money(d.Additional_Structure_Cost)}</span>
+        </div>
+        <div class="pricing-row">
+          <span>Additional EB Charges:</span>
+          <span>${money(d.Additional_EB_Charges)}</span>
+        </div>
+        <div class="pricing-row total">
+          <span>Plant Cost After Subsidy (Net Due):</span>
+          <span>${money(computedNetDue)}</span>
+        </div>
       </div>
     </div>
 
     <div class="signature-container">
       <div class="signature-box">
         <div class="sig-space">
-          ${d.Site_Engineer_Signature ? `<img src="${d.Site_Engineer_Signature}" style="max-height: 55px; max-width: 100%;" />` : d.Assigned_To || 'Authorized Engineer'}
+          ${d.Site_Engineer_Signature ? `<img src="${d.Site_Engineer_Signature}" style="max-height: 55px; max-width: 100%;" />` : d.Site_Survey_Assigned_By || 'Authorized Engineer'}
         </div>
         <strong>SITE ENGINEER SIGNATURE</strong><br>
         <span style="font-size: 9px; color:#888;">Date: ${displayDate} | Time: ${displayTime}</span>
