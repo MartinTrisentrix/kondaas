@@ -109,7 +109,7 @@ export const saveWhatsAppRating = async (c) => {
       // 3. Update MongoDB (using $set with our dynamic fields object)
       const updatedDeal = await db.collection('deals').findOneAndUpdate(
         {
-          mobile: mobile.trim(),
+          whatsappNo: mobile.trim(),
           siteSurveyStatus: "completed" // 🎯 Safety guardrail matching your business logic
         },
         {

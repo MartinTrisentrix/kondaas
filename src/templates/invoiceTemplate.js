@@ -180,13 +180,26 @@ export const getInvoiceTemplate = (lead) => {
 export const getSurveyReportTemplate = (formData) => {
   const d = formData || {};
 
-  const displayDate = d.Site_survey_Completed_Date_Time
-    ? new Date(d.Site_survey_Completed_Date_Time).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-    : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  const rawDateTime = d.Site_survey_Completed_Date_Time;
+  const dateObj = (rawDateTime && !isNaN(new Date(rawDateTime)))
+    ? new Date(rawDateTime)
+    : new Date();
 
-  const displayTime = d.Site_survey_Completed_Date_Time
-    ? new Date(d.Site_survey_Completed_Date_Time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
-    : new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  // Formats to: "27 Jul 2026"
+  const displayDate = dateObj.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'Asia/Kolkata' // Explicitly enforce IST output
+  });
+
+  // Formats to: "02:46 PM" or "2:46 pm"
+  const displayTime = dateObj.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata' // Explicitly enforce IST output
+  });
 
   const reportNumber = d.Report_Number || 'N/A';
 
