@@ -487,8 +487,8 @@ export const getSurveyReportTemplate = (formData) => {
           <td class="value">${d.Order_Type || 'N/A'}</td>
         </tr>
         <tr>
-          <td class="label">Project Type</td>
-          <td class="value">${d.Project_Type || 'N/A'}</td>
+          <td class="label">Product Type</td>
+          <td class="value">${d.Product_Type || 'N/A'}</td>
           <td class="label">Consumer Name</td>
           <td class="value">${d.Consumer_Name || 'N/A'}</td>
         </tr>
@@ -517,8 +517,8 @@ export const getSurveyReportTemplate = (formData) => {
       <div class="section-title">4. Product Information</div>
       <table class="data-table">
         <tr>
-          <td class="label">Project Model</td>
-          <td class="value">${d.Project_Model || 'N/A'}</td>
+          <td class="label">Project Under</td>
+          <td class="value">${d.Project_Type || 'N/A'}</td>
           <td class="label">Inverter Connection Type</td>
           <td class="value">${d.Inverter_Connection_Type || 'N/A'}</td>
         </tr>

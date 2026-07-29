@@ -139,7 +139,7 @@ export const addForm = async (c) => {
         deal_id: dealId,
         mobileNumber,
         ServiceAgentName: serviceAgentName,
-        Report_Number: generatedReportNumber, // 👈 Saved only to local MongoDB forms
+        Report_Number: generatedReportNumber,
         ...dataFields,
         uploadedMediaUrls: uploadedFileUrls,
         createdAt: new Date().toISOString()
@@ -154,7 +154,8 @@ export const addForm = async (c) => {
       const registeredProperties = schemaConfig?.schema?.properties || {};
 
       const dealUpdateFields = {
-        id: dealId
+        id: dealId,
+        Report_Number: generatedReportNumber // 👈 Explicitly added to Zoho update payload!
       };
 
       // Extract field parameters passed by surveyor

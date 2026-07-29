@@ -276,7 +276,7 @@ export const triggerScenarioNotification = async (c) => {
 
               const linkPayload = {
                 id: deal_id,
-                Site_Survey: String(surveyUploadResult.url).trim()
+                Site_Survey_form: String(surveyUploadResult.url).trim()
               };
 
               const crmResponse = await fetch(`https://www.zohoapis.in/crm/v8/Deals/${deal_id}`, {
