@@ -184,6 +184,42 @@ export const rejectOrder = async (c) => {
   }
 };
 
+//Delete the deal from surveyor mobile 
+
+export const deleteDeal = async (c) => {
+  try {
+    // Read dealId from path params OR request JSON body
+    const dealId = c.req.param("dealId") || (await c.req.json().catch(() => ({}))).dealId;
+
+    if (!dealId) {
+      return c.json({ error: "Validation Error: 'dealId' is required." }, 400);
+    }
+
+    return await withDatabase(MONGODB_URI, async (db) => {
+      // 🗑️ Delete document matching deal_id
+      const result = await db.collection("deals").deleteOne({ deal_id: String(dealId) });
+
+      if (result.deletedCount === 0) {
+        console.warn(`⚠️ No deal found with deal_id: ${dealId}`);
+        return c.json({ success: false, message: "No deal found with the provided dealId." }, 404);
+      }
+
+      console.log(`✅ Successfully deleted deal record for deal_id: ${dealId}`);
+      return c.json({ 
+        success: true, 
+        message: `Deal record ${dealId} successfully deleted.`,
+        deletedCount: result.deletedCount 
+      }, 200);
+    });
+
+  } catch (err) {
+    console.error("❌ Exception inside deleteDeal controller:", err.message);
+    return c.json({ error: err.message }, 500);
+  }
+};
+
+
+
 export const completeOrder = async (c) => {
   try {
     const body = await c.req.json();

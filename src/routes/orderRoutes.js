@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
-import { addOrder,rejectOrder,getOrders,getAdminRejections,getAdminCompletions,deleteOrder,completeOrder,updateSurveyStatus,handleZohoDealWebhook,assignDealToSurveyor,zohoWorkflowAssignment,getSurveyorDeals } from '../controllers/orderController.js';
+import { addOrder,rejectOrder,deleteDeal,getOrders,getAdminRejections,getAdminCompletions,deleteOrder,completeOrder,updateSurveyStatus,handleZohoDealWebhook,assignDealToSurveyor,zohoWorkflowAssignment,getSurveyorDeals } from '../controllers/orderController.js';
 
 const orderRoutes = new Hono();
 
 orderRoutes.post('/add', addOrder);
 orderRoutes.post('/reject', rejectOrder);
+orderRoutes.delete('/delete', deleteDeal);
 orderRoutes.post('/complete', completeOrder);
 orderRoutes.get('/all', getOrders);
 orderRoutes.get('/admin-rejections', getAdminRejections);

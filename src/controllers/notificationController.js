@@ -242,10 +242,14 @@ export const triggerScenarioNotification = async (c) => {
             }
 
             console.log(`📄 Fetching forms record for clean mobile: ${cleanedCustomerMobile}...`);
-            const formData = await db.collection("forms").findOne({ WhatsApp_Number: cleanedCustomerMobile || customerMobile  });
+
+
+            //Chnage this whatsapp number to deal id //
+
+            const formData = await db.collection("forms").findOne({ deal_id: deal_id || deal_id  });
 
             if (!formData) {
-              console.error(`❌ Document Generation Cancelled: No form entry found for mobile: ${cleanedCustomerMobile}`);
+              console.error(`❌ Document Generation Cancelled: No form entry found for mobile: ${deal_id}`);
               return;
             }
 
