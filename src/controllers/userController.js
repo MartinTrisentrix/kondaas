@@ -58,6 +58,10 @@ export const addForm = async (c) => {
     const uploadDir = path.join(process.cwd(), 'uploads');
     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
+    // 📁 1. Get or Create the "site" WorkDrive folder upfront
+    const siteFolderId = await getOrCreateLeadsSEFolder(dealId, "site", dataFields.state);
+    const siteFolderUrl = `https://workdrive.zoho.in/file/${siteFolderId}`;
+
     const uploadedFileUrls = {};
 
     // -------------------------------------------------------------------------
@@ -75,7 +79,10 @@ export const addForm = async (c) => {
         const file = filesArray[i];
         if (file && file.name) {
           const targetFolderName = (fieldName === "EB_Bill_Copy") ? "last 6 month EBbill" : "site";
-          const targetFolderId = await getOrCreateLeadsSEFolder(dealId, targetFolderName, dataFields.state);
+          // Reuse pre-fetched siteFolderId if folder is "site" to eliminate redundant DB/API calls
+          const targetFolderId = (targetFolderName === "site") 
+            ? siteFolderId 
+            : await getOrCreateLeadsSEFolder(dealId, targetFolderName, dataFields.state);
 
           const ext = path.extname(file.name) || '.jpg';
           const customFileName = filesArray.length > 1 ? `${fieldName}_${i + 1}${ext}` : `${fieldName}${ext}`;
@@ -140,6 +147,7 @@ export const addForm = async (c) => {
         mobileNumber,
         ServiceAgentName: serviceAgentName,
         Report_Number: generatedReportNumber,
+        Site_Survey: siteFolderUrl, // 👈 Saved locally in Mongo
         ...dataFields,
         uploadedMediaUrls: uploadedFileUrls,
         createdAt: new Date().toISOString()
@@ -155,7 +163,8 @@ export const addForm = async (c) => {
 
       const dealUpdateFields = {
         id: dealId,
-        Report_Number: generatedReportNumber // 👈 Explicitly added to Zoho update payload!
+        Report_Number: generatedReportNumber,
+        Site_Survey: siteFolderUrl // 👈 Updated directly in Zoho Deals
       };
 
       // Extract field parameters passed by surveyor
@@ -165,7 +174,9 @@ export const addForm = async (c) => {
           key === 'Bank_Passbook_Copy' || 
           key === 'Billing_Tax_Copy' ||
           key === 'Report_Number' || 
-          key === 'report_number'
+          key === 'report_number' ||
+          key === 'Site_Survey' ||
+          key === 'site_survey'
         ) {
           continue;
         }
@@ -268,8 +279,7 @@ export const addForm = async (c) => {
           fs.writeFileSync(tempPath, imageBuffer);
           temporaryFilesToClean.push(tempPath);
 
-          const targetFolderId = await getOrCreateLeadsSEFolder(dealId, "site", dataFields.state);
-          const uploadResult = await uploadToZohoWorkDrive(tempPath, screenshotFileName, targetFolderId);
+          const uploadResult = await uploadToZohoWorkDrive(tempPath, screenshotFileName, siteFolderId);
 
           if (uploadResult && uploadResult.url) {
             dealUpdateFields['Advance_Payment_Screenshot'] = String(uploadResult.url).trim();
@@ -298,8 +308,7 @@ export const addForm = async (c) => {
           fs.writeFileSync(tempPath, imageBuffer);
           temporaryFilesToClean.push(tempPath);
 
-          const targetFolderId = await getOrCreateLeadsSEFolder(dealId, "site", dataFields.state);
-          const uploadResult = await uploadToZohoWorkDrive(tempPath, passbookFileName, targetFolderId);
+          const uploadResult = await uploadToZohoWorkDrive(tempPath, passbookFileName, siteFolderId);
 
           if (uploadResult && uploadResult.url) {
             dealUpdateFields['Bank_Passbook_Copy'] = String(uploadResult.url).trim();
@@ -328,8 +337,7 @@ export const addForm = async (c) => {
           fs.writeFileSync(tempPath, imageBuffer);
           temporaryFilesToClean.push(tempPath);
 
-          const targetFolderId = await getOrCreateLeadsSEFolder(dealId, "site", dataFields.state);
-          const uploadResult = await uploadToZohoWorkDrive(tempPath, taxCopyFileName, targetFolderId);
+          const uploadResult = await uploadToZohoWorkDrive(tempPath, taxCopyFileName, siteFolderId);
 
           if (uploadResult && uploadResult.url) {
             dealUpdateFields['Billing_Tax_Copy'] = String(uploadResult.url).trim();
@@ -362,7 +370,7 @@ export const addForm = async (c) => {
         if (resJson?.data?.[0]?.status === "error") {
           console.error("❌ Zoho inner tracking rejection parameters:", JSON.stringify(resJson.data[0]));
         } else {
-          console.log(`🚀 Successfully populated text and image components to Zoho Deal layout.`);
+          console.log(`🚀 Successfully populated text, site folder link, and image components to Zoho Deal layout.`);
         }
       }
 

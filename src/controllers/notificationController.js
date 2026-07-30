@@ -332,7 +332,7 @@ export const triggerScenarioNotification = async (c) => {
               status: "pending",
               createdAt: new Date()
             });
-            processWhatsAppNotification(pdfResult.insertedId).catch(err => console.error(err));
+            //processWhatsAppNotification(pdfResult.insertedId).catch(err => console.error(err));//
 
             // 📊 🎯 MOVED TO THE LAST STEP: Fire interactive satisfaction rating poll safely here!
             console.log("📊 Sending customer satisfaction rating poll feedback interface...");
