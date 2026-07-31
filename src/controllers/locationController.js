@@ -124,57 +124,56 @@ export const getCurrentLocation = async (c) => {
   }
 };
 
-
-export const saveJobCoordinates = async (c) => {
+export const saveDealDistance = async (c) => {
   try {
-    const body = await c.req.json();
-    const { dealId, startLat, startLng, endLat, endLng } = body;
+    const { deal_id, deal_name, mobile, to_site, to_home, to_office } = await c.req.json();
 
-    // 1. Strict input validation
-    if (!dealId || startLat === undefined || startLng === undefined || endLat === undefined || endLng === undefined) {
-      return c.json({
-        success: false,
-        message: "Missing required parameters. Ensure dealId, startLat, startLng, endLat, and endLng are sent."
-      }, 400);
+    // Mandatory fields validation
+    if (!deal_id || !deal_name || to_site === undefined || to_site === null|| !mobile) {
+      return c.json({ error: "deal_id, deal_name, mobile, and to_site are required!" }, 400);
     }
 
+    // Build the document dynamically
+    const distanceData = {
+      deal_id,
+      deal_name,
+      mobile,
+      to_site,
+      createdAt: new Date()
+    };
+
+    if (to_home !== undefined && to_home !== null) {
+      distanceData.to_home = to_home;
+    }
+
+    if (to_office !== undefined && to_office !== null) {
+      distanceData.to_office = to_office;
+    }
+
+    // Execute database operations using withDatabase wrapper
     return await withDatabase(MONGODB_URI, async (db) => {
-      // We log this into its own clean collection tracking trips/journeys
-      const locationCollection = db.collection("deal_distance");
+      const collection = db.collection("deal_distance");
 
-      // 2. Build the straight insert payload layout
-      const newCoordinatesLog = {
-        dealId: String(dealId).trim(),
-        startLocation: {
-          latitude: Number(startLat),
-          longitude: Number(startLng)
-        },
-        endLocation: {
-          latitude: Number(endLat),
-          longitude: Number(endLng)
-        },
-        createdAt: new Date()
-      };
+      // 1. Check for existing record with the same deal_id
+      const existingRecord = await collection.findOne({ deal_id });
+      if (existingRecord) {
+        return c.json({ error: "A distance record for this deal_id already exists!" }, 409);
+      }
 
-      // 3. Raw insert into the database with no lookups or updates needed
-      const result = await locationCollection.insertOne(newCoordinatesLog);
-
-      console.log(`📍 [GPS Log Saved] Inserted a new journey record for Deal: ${dealId}`);
+      // 2. Insert new record if no duplicate exists
+      const result = await collection.insertOne(distanceData);
 
       return c.json({
-        success: true,
-        message: "Trip tracking coordinates logged successfully.",
-        logId: result.insertedId
+        message: "Deal distance saved successfully",
+        insertedId: result.insertedId,
+        data: distanceData
       }, 201);
     });
 
-  } catch (error) {
-    console.error("❌ Exception inside saveJobCoordinates pipeline:", error.message);
-    return c.json({
-      success: false,
-      message: "Internal configuration error logging trip metrics.",
-      error: error.message
-    }, 500);
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
   }
 };
+
+
 

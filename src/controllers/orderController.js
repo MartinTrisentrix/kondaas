@@ -780,6 +780,8 @@ export const zohoWorkflowAssignment = async (c) => {
     const Site_Survey_Req_Date_Time = payload.Site_Survey_Req_Date_Time || null;
     const comment = payload.comment || "Assigned via Zoho CRM Automated Field Update";
     const Service_Agent_Name = payload.Service_Agent_Name || null;
+    const home_location = payload.home_location || null;
+    const office_location = payload.office_location || null;
 
     // ⚡ SMART PARSING WORKAROUND FOR COMBINED ZOHO FIELD:
     let CreatedBy = null;
@@ -789,6 +791,9 @@ export const zohoWorkflowAssignment = async (c) => {
     let leadSource = null;
     let postalCode = null;
     let country = null;
+    let No_of_Panels = null;
+    let roofType = null;
+
 
     const rawCreatedBy = payload.Created_By || null;
 
@@ -798,6 +803,8 @@ export const zohoWorkflowAssignment = async (c) => {
         const parsedParams = new URLSearchParams(`CreatedBy=${rawCreatedBy.trim()}`);
 
         CreatedBy = parsedParams.get('CreatedBy')?.trim() || null;
+        No_of_Panels = parsedParams.get('No_of_Panels')?.trim() || null;
+        roofType = parsedParams.get('Roof_Type')?.trim() || null;
         District = parsedParams.get('District')?.trim() || null;
         SubDistrict = parsedParams.get('Sub_District')?.trim() || null;
         GoogleLocation = parsedParams.get('Google_Location')?.trim() || null;
@@ -827,8 +834,7 @@ export const zohoWorkflowAssignment = async (c) => {
     const inverterCapacity = payload.Inverter_Capacity || null;
     const solarPanel_Model = payload.Solar_Panel_Model || null;
     const solarPanelBrand = payload.Solar_Panel_Brand || null;
-    const noOfPanels = payload.No_of_Panels || null;
-    const roofType = payload.Roof_Type || null;
+   
 
     const siteEngineerContact = payload.site_engineer_contact || payload.Site_Engineer_Contact;
 
@@ -883,6 +889,8 @@ export const zohoWorkflowAssignment = async (c) => {
         ServiceAgentName: Service_Agent_Name,
         SubDistrict: SubDistrict,
         GoogleLocation: GoogleLocation,
+        home_location: home_location,
+        office_location: office_location,
 
         productType: productType,
         orderType: orderType,
@@ -892,7 +900,7 @@ export const zohoWorkflowAssignment = async (c) => {
         inverterCapacity: inverterCapacity,
         solarPanelModel: solarPanel_Model,
         solarPanelBrand: solarPanelBrand,
-        noOfPanels: noOfPanels,
+        noOfPanels: No_of_Panels,
         roofType: roofType,
       };
 

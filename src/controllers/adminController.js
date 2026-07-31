@@ -396,50 +396,17 @@ export const whitelistUser = async (c) => {
 
 //See distance travelled for leads
 
-export const getJobCoordinates = async (c) => {
+export const getDealDistance = async (c) => {
   try {
-    // 1. Extract dealId from the URL route parameter
-    const dealId = c.req.param('dealId');
-
-    if (!dealId) {
-      return c.json({
-        success: false,
-        message: "Missing parameter: dealId is required in the URL path."
-      }, 400);
-    }
-
+    
     return await withDatabase(MONGODB_URI, async (db) => {
-      const locationCollection = db.collection("deal_distance");
+      const collection = db.collection("deal_distance");
 
-      // 2. Look up the document in the database matching the dealId
-      const log = await locationCollection.findOne({ dealId: String(dealId).trim() });
-
-      // 3. Handle a case where no coordinates have been logged yet
-      if (!log) {
-        return c.json({
-          success: false,
-          message: `No coordinate logs found for Deal ID: ${dealId}`
-        }, 404);
-      }
-
-      // 4. Return the clean location payload
-      return c.json({
-        success: true,
-        data: {
-          dealId: log.dealId,
-          startLocation: log.startLocation,
-          endLocation: log.endLocation,
-          createdAt: log.createdAt
-        }
-      }, 200);
+      const records = await collection.find({}).toArray();
+      return c.json({ success: true, count: records.length, data: records }, 200);
     });
 
-  } catch (error) {
-    console.error("❌ Exception inside getJobCoordinates pipeline:", error.message);
-    return c.json({
-      success: false,
-      message: "Internal configuration error fetching trip metrics.",
-      error: error.message
-    }, 500);
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
   }
 };
