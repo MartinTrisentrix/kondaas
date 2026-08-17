@@ -105,10 +105,10 @@ export const addForm = async (c) => {
 
     // 2. Dual Write Database Execution & Live Zoho Push
     return await withDatabase(MONGODB_URI, async (db) => {
-      const existing = await db.collection("forms").findOne({ mobileNumber });
+      const existing = await db.collection("forms").findOne({ deal_id: dealId });
 
       if (existing) {
-        return c.json({ error: "Mobile number already registered!" }, 400);
+        return c.json({ error: "Deal already Done!" }, 400);
       }
 
       // 🔍 Fetch ServiceAgentName from deals collection using deal_id
