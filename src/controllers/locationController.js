@@ -126,10 +126,10 @@ export const getCurrentLocation = async (c) => {
 
 export const saveDealDistance = async (c) => {
   try {
-    const { deal_id, deal_name, mobile, to_site, to_home, to_office } = await c.req.json();
+    const { deal_id, deal_name, mobile, to_site, to_home, to_office, surveyor_name} = await c.req.json();
 
     // Mandatory fields validation
-    if (!deal_id || !deal_name || to_site === undefined || to_site === null|| !mobile) {
+    if (!deal_id || !deal_name || to_site === undefined || to_site === null|| !mobile || !surveyor_name) {
       return c.json({ error: "deal_id, deal_name, mobile, and to_site are required!" }, 400);
     }
 
@@ -139,6 +139,7 @@ export const saveDealDistance = async (c) => {
       deal_name,
       mobile,
       to_site,
+      surveyor_name,
       createdAt: new Date()
     };
 
