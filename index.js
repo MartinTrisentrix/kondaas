@@ -36,11 +36,13 @@ import orderRoutes from './src/routes/orderRoutes.js';
 import templateRoutes from './src/routes/templateRoutes.js';
 import notificationRoutes from './src/routes/notificationRoutes.js';
 import solarmanRoutes from './src/routes/solarmanRoutes.js';
+import deyeRoutes from './src/routes/deyeRoutes.js';
 import savingsRoutes from './src/routes/savingsRoutes.js';
 import ticketRoutes from './src/routes/ticketRoutes.js';
 import referralRoutes from './src/routes/referralRoutes.js';
 import installerRoutes from './src/routes/installerRoutes.js';
 import adminRoutes from './src/routes/adminRoutes.js';
+
 
 const app = new Hono();
 
@@ -53,6 +55,7 @@ app.route('/order', orderRoutes);
 app.route('/template', templateRoutes);
 app.route('/notification', notificationRoutes);
 app.route('/solarman', solarmanRoutes);
+app.route('/deye', deyeRoutes);
 app.route('/savings', savingsRoutes);
 app.route('/ticket', ticketRoutes);
 app.route('/referral', referralRoutes);

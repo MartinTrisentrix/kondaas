@@ -1,22 +1,25 @@
 import { withDatabase, getSystemKeys } from '../utils/config.js';
 import { SolarParser } from '../utils/SolarParser.js';
-import { getInternalSolarmanToken } from '../utils/solarmanApi.js';
+import { getInternalDeyeToken, fetchDeyeHistory } from '../utils/deyeApi.js';
 
-const SOLARMAN_BASE_URL = "https://globalapi.solarmanpv.com";
+const DEYE_BASE_URL = "https://india-developer.deyecloud.com";
 const MONGODB_URI = process.env.MONGODB_URI;
 
 /**
- * Helper to fetch Solarman keys once per request
+ * Helper to fetch Deye keys once per request
  */
 const getKeys = async (db) => {
   const keys = await getSystemKeys(db);
-  return keys.solarman;  
+  return keys.deye || keys.solarman || keys;
 };
 
-export const getSolarmanToken = async (c) => {
+/**
+ * 1. Direct Token Retrieval Endpoint
+ */
+export const getDeyeToken = async (c) => {
   try {
     const { email, password } = await c.req.json();
-   
+
     if (!email || !password) {
       return c.json({ error: "email and password are required!" }, 400);
     }
@@ -25,7 +28,7 @@ export const getSolarmanToken = async (c) => {
       const { appId, appSecret } = await getKeys(db);
 
       const response = await fetch(
-        `${SOLARMAN_BASE_URL}/account/v1.0/token?appId=${appId}&language=en`,
+        `${DEYE_BASE_URL}/v1.0/account/token?appId=${appId}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -35,7 +38,7 @@ export const getSolarmanToken = async (c) => {
 
       const data = await response.json();
 
-      if (!response.ok) {
+      if (!response.ok || !data.success) {
         return c.json({
           error: data.msg || "Failed to get token",
           raw: data
@@ -46,16 +49,17 @@ export const getSolarmanToken = async (c) => {
     });
   } catch (err) {
     return c.json({ error: err.message }, 500);
-  } 
+  }
 };
 
-export const getSolarmanStations = async (c) => {
+/**
+ * 2. Fetch Station List with Device Verification & Session Auth
+ */
+export const getDeyeStations = async (c) => {
   try {
-    // 🛡️ SECURITY FEATURES: Extracted cleanly from the mobile app request headers
     const incomingSecurityToken = c.req.header('x-auth-token');
-    const incomingDeviceId = c.req.header('x-device-id'); // 📱 Moved to headers to match pattern!
-    
-    // 🔌 Clean API Payload: Only phoneNo is needed in the body payload now
+    const incomingDeviceId = c.req.header('x-device-id');
+
     const { phoneNo } = await c.req.json();
 
     if (!incomingSecurityToken) {
@@ -71,14 +75,12 @@ export const getSolarmanStations = async (c) => {
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // Fetch the full user document to cross-examine device lists and tokens
       const user = await db.collection("userDetails").findOne({ _id: phoneNo });
 
       if (!user) {
         return c.json({ error: "User profile not found" }, 404);
       }
 
-      // 🛡️ MULTI-DEVICE SECURITY CHECK: Locate target device session inside the devices list array
       const devicesList = user.PlatformInfo?.devices || [];
       const currentDeviceSession = devicesList.find(d => d.deviceId === incomingDeviceId);
       const storedToken = currentDeviceSession?.authToken;
@@ -88,31 +90,24 @@ export const getSolarmanStations = async (c) => {
         return c.json({ error: "Unauthorized: Invalid security token" }, 401);
       }
 
-      // 🔐 Check for internal Solarman profile credentials to run background login
       if (!user.UserInfo?.email || !user.UserInfo?.password) {
-        return c.json({ error: "Solarman credentials missing on profile" }, 404);
+        return c.json({ error: "Deye credentials missing on profile" }, 404);
       }
 
-      // 🔑 Generate background token session securely using profile credentials
-      
-      const token = await getInternalSolarmanToken(
+      const token = await getInternalDeyeToken(
         db,
         user.UserInfo.email,
         user.UserInfo.password,
-        getSystemKeys
+        getKeys
       );
 
-      // --- TOKEN GENERATED SECURELY: Proceed to Solarman API ---
-      const { appId } = await getSystemKeys(db);
-
-      
       const response = await fetch(
-        `${SOLARMAN_BASE_URL}/station/v1.0/list?appId=${appId}&language=en`,
+        `${DEYE_BASE_URL}/v1.0/station/list`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `bearer ${token}` // Secure Internal Token applied behind the scenes
+            "Authorization": `bearer ${token}`
           },
           body: JSON.stringify({ page: 1, size: 10 })
         }
@@ -134,12 +129,12 @@ export const getSolarmanStations = async (c) => {
   }
 };
 
-export const getSolarmanDevices = async (c) => {
+/**
+ * 3. Fetch Devices inside a Station
+ */
+export const getDeyeDevices = async (c) => {
   try {
-    // 🛡️ Get the token sent by the mobile from the request header
     const incomingToken = c.req.header('x-auth-token');
-    
-    // Parameters from the request body
     const { token, stationId, phoneNo } = await c.req.json();
 
     if (!phoneNo) {
@@ -155,14 +150,12 @@ export const getSolarmanDevices = async (c) => {
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // Fetch the full user document without projections
       const user = await db.collection("userDetails").findOne({ _id: phoneNo });
 
       if (!user) {
         return c.json({ error: "User profile not found" }, 404);
       }
 
-      // 🛡️ SECURITY CHECK: Compare the header token with the stored authToken
       const storedToken = user.UserInfo?.authToken;
 
       if (!storedToken || storedToken !== incomingToken) {
@@ -170,18 +163,16 @@ export const getSolarmanDevices = async (c) => {
         return c.json({ error: "Unauthorized: Invalid security token" }, 401);
       }
 
-      // --- TOKEN VERIFIED: Proceed to Solarman API ---
-      const { appId } = await getKeys(db);
-
+      // Tested endpoint: /v1.0/station/device with stationIds array
       const response = await fetch(
-        `${SOLARMAN_BASE_URL}/station/v1.0/device?appId=${appId}&language=en`,
+        `${DEYE_BASE_URL}/v1.0/station/device`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "Authorization": `bearer ${token}`
           },
-          body: JSON.stringify({ stationId, page: 1, size: 20 })
+          body: JSON.stringify({ stationIds: [Number(stationId)], page: 1, size: 20 })
         }
       );
 
@@ -190,7 +181,7 @@ export const getSolarmanDevices = async (c) => {
       return c.json({
         success: data.success,
         message: data.msg || "Response received",
-        devices: data.deviceList || data.deviceListItems || data.stationDeviceList || []
+        devices: data.deviceListItems || data.deviceList || []
       });
     });
   } catch (err) {
@@ -198,26 +189,28 @@ export const getSolarmanDevices = async (c) => {
   }
 };
 
-export const getSolarmanRealTimeData = async (c) => {
+/**
+ * 4. Fetch Real-Time Data for a Device
+ */
+export const getDeyeRealTimeData = async (c) => {
   try {
-    const { token, deviceId } = await c.req.json();
+    const { token, deviceSn } = await c.req.json();
 
-    if (!token || !deviceId) {
-      return c.json({ error: "Token and Device ID are required!" }, 400);
+    if (!token || !deviceSn) {
+      return c.json({ error: "Token and Device SN are required!" }, 400);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      const { appId } = await getKeys(db);
-
+      // Tested endpoint: /v1.0/device/latest with deviceList array
       const response = await fetch(
-        `${SOLARMAN_BASE_URL}/device/v1.0/currentData?appId=${appId}&language=en`,
+        `${DEYE_BASE_URL}/v1.0/device/latest`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "Authorization": `bearer ${token}`
           },
-          body: JSON.stringify({ deviceId })
+          body: JSON.stringify({ deviceList: [deviceSn] })
         }
       );
 
@@ -227,10 +220,12 @@ export const getSolarmanRealTimeData = async (c) => {
         return c.json({ error: data.msg || "Failed to fetch real-time data", raw: data }, 400);
       }
 
+      const inverterMetrics = data.deviceDataList?.[0]?.dataList || [];
+
       return c.json({
         message: "Real-time data retrieved successfully",
-        deviceId,
-        dataList: data.dataList || []
+        deviceSn,
+        dataList: inverterMetrics
       });
     });
   } catch (err) {
@@ -238,66 +233,52 @@ export const getSolarmanRealTimeData = async (c) => {
   }
 };
 
-// ☀️ Pure Core Helper Function for Solarman API Calls (Bypasses Hono Context)
-export const getSolarmanDataCore = async (db, user, stationId, timeType, startTime, endTime) => {
+/**
+ * 5. Pure Core Helper Function for Deye History Calls
+ */
+export const getDeyeDataCore = async (db, user, deviceSn, timeType, startTime, endTime) => {
   try {
-    // Check for internal Solarman profile credentials
     if (!user.UserInfo?.email || !user.UserInfo?.password) {
-      throw new Error("Solarman credentials missing on profile");
+      throw new Error("Deye credentials missing on profile");
     }
 
-    // Fetch fresh token using your existing internal token utility
-    const token = await getInternalSolarmanToken(
+    const token = await getInternalDeyeToken(
       db,
       user.UserInfo.email,
       user.UserInfo.password,
-      getSystemKeys
+      getKeys
     );
 
-    // Fetch system keys
-    const { appId } = await getSystemKeys(db);
-
-    // Fire fresh request directly to the external Solarman API
-    const response = await fetch(
-      `${SOLARMAN_BASE_URL}/station/v1.0/history?appId=${appId}&language=en`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `bearer ${token}`
-        },
-        body: JSON.stringify({ 
-          stationId: Number(stationId), 
-          timeType: Number(timeType), 
-          startTime, 
-          endTime 
-        })
-      }
-    );
-
-    const data = await response.json();
+    const data = await fetchDeyeHistory({
+      deviceSn,
+      timeType: Number(timeType),
+      startTime,
+      endTime,
+      token,
+      db,
+      getKeys
+    });
 
     if (!data.success) {
-      throw new Error(data.msg || "Solarman External API Request Failed");
+      throw new Error(data.msg || "Deye External API Request Failed");
     }
 
     return data;
-
   } catch (error) {
-    console.error("❌ Error in getSolarmanDataCore helper:", error.message);
+    console.error("❌ Error in getDeyeDataCore helper:", error.message);
     throw error;
   }
 };
 
-// 📱 Your Original Mobile App Route Function (Fully Intact)
-export const getSolarmanHistory = async (c) => {
+/**
+ * 6. Historical Data with Multi-Device Auth & Caching Layer
+ */
+export const getDeyeHistory = async (c) => {
   try {
-    // 🛡️ SECURITY FEATURES: Extracted cleanly from the mobile app request headers
     const incomingSecurityToken = c.header('x-auth-token') || c.req.header('x-auth-token');
-    const incomingDeviceId = c.header('x-device-id') || c.req.header('x-device-id'); 
-    
-    // 🔌 Clean API Payload: Only standard query filters left in the body payload
-    const { stationId, timeType, startTime, endTime, phoneNo } = await c.req.json();
+    const incomingDeviceId = c.header('x-device-id') || c.req.header('x-device-id');
+
+    const { stationId, deviceSn, timeType, startTime, endTime, phoneNo } = await c.req.json();
 
     if (!incomingSecurityToken) {
       return c.json({ error: "Unauthorized: No security token provided" }, 401);
@@ -316,8 +297,7 @@ export const getSolarmanHistory = async (c) => {
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // 🛡️ SECURITY LOOKUP: Find user by phone and verify station ownership array link
-      const user = await db.collection("userDetails").findOne({ 
+      const user = await db.collection("userDetails").findOne({
         _id: phoneNo,
         "devicelist.id": Number(stationId)
       });
@@ -326,7 +306,6 @@ export const getSolarmanHistory = async (c) => {
         return c.json({ error: "Unauthorized: Invalid profile or unlinked station" }, 401);
       }
 
-      // 🛡️ MULTI-DEVICE SECURITY CHECK: Scan active device tracking array list using the header ID
       const devicesList = user.PlatformInfo?.devices || [];
       const currentDeviceSession = devicesList.find(d => d.deviceId === incomingDeviceId);
       const storedToken = currentDeviceSession?.authToken;
@@ -336,13 +315,11 @@ export const getSolarmanHistory = async (c) => {
         return c.json({ error: "Unauthorized: Invalid security token configuration" }, 401);
       }
 
-      // 🔐 Check for internal Solarman profile credentials
       if (!user.UserInfo?.email || !user.UserInfo?.password) {
-        return c.json({ error: "Solarman credentials missing on profile" }, 404);
+        return c.json({ error: "Deye credentials missing on profile" }, 404);
       }
 
-      // 🕒 LAYER 2 CHECK: Cache Logic for non-day timeTypes (Week, Month, Year)
-      const isDayRequest = Number(timeType) === 1; 
+      const isDayRequest = Number(timeType) === 1;
       const cacheKey = `history_${timeType}_${startTime}_${endTime}`;
 
       if (!isDayRequest) {
@@ -352,10 +329,9 @@ export const getSolarmanHistory = async (c) => {
           const storedChart = cache.historyCache[cacheKey];
           const lastCachedTime = new Date(storedChart.lastCalculatedAt);
           const currentTime = new Date();
-          
+
           const hoursPassed = (currentTime - lastCachedTime) / (1000 * 60 * 60);
 
-          // If this chart data was fetched less than 24 hours ago, return it immediately!
           if (hoursPassed < 24) {
             return c.json({
               success: true,
@@ -364,30 +340,29 @@ export const getSolarmanHistory = async (c) => {
             });
           }
         }
-      } 
+      }
 
-      // 💥 LAYER 3: CACHE MISS -> FETCH FRESH DATA FROM EXTERNAL API VIA NEW HELPER
-      const data = await getSolarmanDataCore(db, user, stationId, timeType, startTime, endTime);
+      // Determine target inverter serial number
+      const targetDeviceSn = deviceSn || user.devicelist?.find(d => Number(d.id) === Number(stationId))?.deviceSn;
 
-      const rawItems = data.stationDataItems || [];
+      if (!targetDeviceSn) {
+        return c.json({ error: "Device SN (inverter serial number) is required for Deye history retrieval." }, 400);
+      }
 
-      // 2️⃣ ⚡ CRITICAL DAY FIXED: Compute today's active production using cumulative lifetime values
+      const data = await getDeyeDataCore(db, user, targetDeviceSn, timeType, startTime, endTime);
+      const rawItems = data.deviceDataList || data.dataList || [];
+
       if (isDayRequest) {
         let computedDayUnits = 0;
 
         try {
-          // 1. Grab the current instant cumulative generation total from your live records
           const currentLifetimeTotal = Number(data.generationTotal ?? 0);
-
-          // 2. Fetch the baseline generation total recorded at the start of today (Midnight) from your database
           const historyCacheDoc = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
-          
           const midnightBaselineTotal = Number(historyCacheDoc?.dayStartBaselineTotal ?? 0);
 
           if (currentLifetimeTotal > 0 && midnightBaselineTotal > 0) {
             computedDayUnits = Number((currentLifetimeTotal - midnightBaselineTotal).toFixed(2));
           } else {
-            // Fallback: If no database baseline exists yet, scan the history intervals safely
             let maxVal = 0;
             for (const item of rawItems) {
               const val = Number(item.generationValue ?? item.value ?? 0);
@@ -402,12 +377,11 @@ export const getSolarmanHistory = async (c) => {
         return c.json({
           success: true,
           fromCache: false,
-          liveGenerationToday: computedDayUnits > 0 ? computedDayUnits : 29.6, // Graceful fallback value
+          liveGenerationToday: computedDayUnits > 0 ? computedDayUnits : 0,
           data: rawItems
         });
       }
 
-      // 💾 SAVE TO DB CACHE (Strictly executed ONLY for Week, Month, and Year charts)
       const chartDataToCache = {
         data: rawItems,
         lastCalculatedAt: new Date().toISOString()
@@ -415,10 +389,10 @@ export const getSolarmanHistory = async (c) => {
 
       await db.collection("solarSavingsCache").updateOne(
         { _id: String(stationId) },
-        { 
-          $set: { 
-            [`historyCache.${cacheKey}`]: chartDataToCache 
-          } 
+        {
+          $set: {
+            [`historyCache.${cacheKey}`]: chartDataToCache
+          }
         },
         { upsert: true }
       );
@@ -434,20 +408,20 @@ export const getSolarmanHistory = async (c) => {
   }
 };
 
-
-export const saveUserDetails = async (c) => {
+/**
+ * 7. Save User Profile Details & Parse Station Device List
+ */
+export const saveDeyeUserDetails = async (c) => {
   try {
-    // 🛡️ Capture the active transit headers
     const incomingSecurityToken = c.req.header('x-auth-token');
     const headerDeviceId = c.req.header('x-device-id');
 
     const data = await c.req.json();
     const mobile = data.UserInfo?.phoneNo;
-    
+
     const incomingDevice = data.PlatformInfo?.devices?.[0] || data.PlatformInfo?.device;
     const deviceId = headerDeviceId || incomingDevice?.deviceId;
 
-    // --- CRITICAL INPUT VALIDATIONS ---
     if (!incomingSecurityToken) {
       return c.json({ error: "Unauthorized: No security token provided in headers" }, 401);
     }
@@ -459,47 +433,44 @@ export const saveUserDetails = async (c) => {
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // Fetch the existing user profile
       const existingUser = await db.collection("userDetails").findOne({ _id: mobile });
-      
+
       let deviceExistsInDb = false;
 
       if (existingUser) {
         const devicesList = existingUser.PlatformInfo?.devices || [];
         const currentDeviceSession = devicesList.find(d => d.deviceId === deviceId);
         if (currentDeviceSession) {
-          deviceExistsInDb = true; // Flag tracked purely for insertion fallback control below
+          deviceExistsInDb = true;
         }
       }
-      
+
       let currentDevicesList = existingUser?.PlatformInfo?.devices || [];
 
-      // 🔄 FIX APPLIED: Clean loop simply overwrites old tokens upon fresh logins!
       currentDevicesList = currentDevicesList.map(d => {
         if (d.deviceId === deviceId) {
           return {
             ...d,
             os: incomingDevice?.os || d.os || "Unknown",
             version: incomingDevice?.version || d.version || "Unknown",
-            authToken: incomingSecurityToken, // ⚡ Blindly accepts and replaces old tokens on login!
+            authToken: incomingSecurityToken,
             fcmToken: incomingDevice?.fcmToken || d.fcmToken || data.UserInfo?.fcmToken,
             lastUsedAt: new Date().toISOString(),
-            isLastLoggedIn: true 
+            isLastLoggedIn: true
           };
         }
         return {
           ...d,
-          isLastLoggedIn: false // Explicitly flip past background profiles to false
+          isLastLoggedIn: false
         };
       });
 
-      // If it's a completely fresh phone registration, append it cleanly
       if (!deviceExistsInDb) {
         currentDevicesList.push({
           deviceId: deviceId,
           os: incomingDevice?.os || "Unknown",
           version: incomingDevice?.version || "Unknown",
-          authToken: incomingSecurityToken, 
+          authToken: incomingSecurityToken,
           fcmToken: incomingDevice?.fcmToken || data.UserInfo?.fcmToken,
           lastUsedAt: new Date().toISOString(),
           isLastLoggedIn: true
@@ -517,14 +488,14 @@ export const saveUserDetails = async (c) => {
         if (ui.email)    setFields["UserInfo.email"]    = ui.email;
         if (ui.password) setFields["UserInfo.password"] = ui.password;
         if (ui.name)     setFields["UserInfo.name"]     = ui.name;
-        
+
         setFields["UserInfo.role"] = existingUser?.UserInfo?.role || ui.role || "user";
       }
 
       if (data.devicelist && data.devicelist.length > 0) {
         const firstParsed = SolarParser.parse(data.devicelist[0]);
         if (firstParsed.state) setFields["UserInfo.state"] = firstParsed.state;
-        
+
         setFields.devicelist = data.devicelist.map((rawStation) => {
           const parsed = SolarParser.parse(rawStation);
           return {
@@ -538,13 +509,13 @@ export const saveUserDetails = async (c) => {
 
       await db.collection("userDetails").updateOne(
         { _id: mobile },
-        { $set: setFields }, 
+        { $set: setFields },
         { upsert: true }
       );
 
-      return c.json({ 
-        success: true, 
-        message: "Profile settings and active device session synced successfully" 
+      return c.json({
+        success: true,
+        message: "Profile settings and active device session synced successfully"
       });
     });
   } catch (err) {
@@ -552,13 +523,14 @@ export const saveUserDetails = async (c) => {
   }
 };
 
-export const getUser = async (c) => {
+/**
+ * 8. Get User Profile with Device Session Authorization
+ */
+export const getDeyeUser = async (c) => {
   try {
-    // 🛡️ SECURITY FEATURES: Extracted cleanly from the mobile app request headers
     const incomingToken = c.req.header('x-auth-token');
-    const incomingDeviceId = c.req.header('x-device-id'); // 📱 NEW: Device ID moved to headers!
-    
-    // 🔌 Clean API Payload: Only phoneNo is needed in the body payload now
+    const incomingDeviceId = c.req.header('x-device-id');
+
     const { phoneNo } = await c.req.json();
 
     if (!phoneNo) {
@@ -569,22 +541,20 @@ export const getUser = async (c) => {
       return c.json({ error: "Unauthorized: No security token provided" }, 401);
     }
 
-    // 🚨 HEADER CHECK: Ensure deviceId is provided in the headers to map token tracking
     if (!incomingDeviceId) {
       return c.json({ error: "Unauthorized: No deviceId provided in headers" }, 401);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // 1. We fetch the user with targeted fields including role and our array of sessions
       const user = await db.collection("userDetails").findOne(
         { _id: phoneNo },
-        { 
-          projection: { 
-            "UserInfo.email": 1, 
-            "UserInfo.password": 1, 
-            "UserInfo.role": 1,          
-            "PlatformInfo.devices": 1    
-          } 
+        {
+          projection: {
+            "UserInfo.email": 1,
+            "UserInfo.password": 1,
+            "UserInfo.role": 1,
+            "PlatformInfo.devices": 1
+          }
         }
       );
 
@@ -592,7 +562,6 @@ export const getUser = async (c) => {
         return c.json({ error: "User profile not found" }, 404);
       }
 
-      // 🛡️ MULTI-DEVICE SECURITY CHECK: Drill into array using header-extracted deviceId
       const devicesList = user.PlatformInfo?.devices || [];
       const currentDeviceSession = devicesList.find(d => d.deviceId === incomingDeviceId);
       const storedToken = currentDeviceSession?.authToken;
@@ -602,115 +571,17 @@ export const getUser = async (c) => {
         return c.json({ error: "Unauthorized: Invalid security token" }, 401);
       }
 
-      // ✅ SUCCESS: Send back email, password, and the newly added role field fallback
       return c.json({
         success: true,
         data: {
           email: user.UserInfo?.email,
           password: user.UserInfo?.password,
-          role: user.UserInfo?.role || "user" 
+          role: user.UserInfo?.role || "user"
         }
       });
     });
   } catch (err) {
-    console.error("❌ Error in getUser:", err.message);
-    return c.json({ error: err.message }, 500);
-  }
-};
-
-export const seedTariffSlabs = async (c) => {
-  try {
-    return await withDatabase(MONGODB_URI, async (db) => {
-      const collection = db.collection("solarExportSlabs");
-
-      // 🔄 UPDATED: Tamil Nadu layout featuring date milestones and usage conditions
-      const tamilNaduData = {
-        state: "Tamil Nadu",
-        category: "solar_export_credit",
-        type: "date_based_progressive", 
-        billingRules: [
-          {
-            effectiveTo: "2026-04-30",
-            type: "progressive",
-            freeUnits: 100,
-            slabs: [
-              { from: 1, to: 100, rate: 0 },
-              { from: 101, to: 200, rate: 2.35 },
-              { from: 201, to: 400, rate: 4.7 },
-              { from: 401, to: 500, rate: 6.3 },
-              { from: 501, to: 600, rate: 8.4 },
-              { from: 601, to: 800, rate: 9.45 },
-              { from: 801, to: 1000, rate: 10.5 },
-              { from: 1001, to: null, rate: 11.55 }
-            ]
-          },
-          {
-            effectiveFrom: "2026-05-01",
-            type: "conditional_progressive",
-            condition: {
-              maxUnits: 500
-            },
-            freeUnits: 200,
-            slabs: [
-              { from: 1, to: 200, rate: 0 },
-              { from: 201, to: 400, rate: 4.7 },
-              { from: 401, to: 500, rate: 6.3 }
-            ]
-          },
-          {
-            effectiveFrom: "2026-05-01",
-            type: "conditional_progressive",
-            condition: {
-              minUnits: 501
-            },
-            freeUnits: 100,
-            slabs: [
-              { from: 1, to: 100, rate: 0 },
-              { from: 101, to: 200, rate: 2.35 },
-              { from: 201, to: 400, rate: 4.7 },
-              { from: 401, to: 500, rate: 6.3 },
-              { from: 501, to: 600, rate: 8.4 },
-              { from: 601, to: 800, rate: 9.45 },
-              { from: 801, to: 1000, rate: 10.5 },
-              { from: 1001, to: null, rate: 11.55 }
-            ]
-          }
-        ],
-        updatedAt: new Date()
-      };
-
-      const keralaData = {
-        state: "kerala",
-        category: "domestic_consumption",
-        type: "telescopic + non-telescopic",
-        fixedCharges: {
-          single_phase: { up_to_250: 0 } 
-        },
-        slabs: {
-          telescopic_up_to_250: [
-            { from: 0, to: 50, rate: 3.35 },
-            { from: 51, to: 100, rate: 4.25 },
-            { from: 101, to: 150, rate: 5.35 },
-            { from: 151, to: 200, rate: 7.2 },
-            { from: 201, to: 250, rate: 8.5 }
-          ],
-          non_telescopic_above_250: [
-            { from: 251, to: 300, rate: 6.75 },
-            { from: 301, to: 350, rate: 7.6 },
-            { from: 351, to: 400, rate: 7.95 },
-            { from: 401, to: 500, rate: 8.25 },
-            { from: 501, to: null, rate: 9.2 }
-          ]
-        },
-        updatedAt: new Date()
-      };
-
-      await collection.updateOne({ _id: "tamil-nadu" }, { $set: tamilNaduData }, { upsert: true });
-      await collection.updateOne({ _id: "kerala" }, { $set: keralaData }, { upsert: true });
-
-      return c.json({ success: true, message: "Tariff slabs updated successfully with date-based progressive rules" });
-    });
-  } catch (err) {
+    console.error("❌ Error in getDeyeUser:", err.message);
     return c.json({ error: err.message }, 500);
   }
 };
