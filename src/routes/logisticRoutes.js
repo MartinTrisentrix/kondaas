@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 
-import { addLocation, getLocationByTime, getCurrentLocation,createLogisticsProduct,logLogisticsCompletion,updateProductStatus,updateLogisticsStatus,getLogisticsDealsByMobile,rejectLogisticsDeal } from '../controllers/logisticController.js';
+import { addLocation, getLocationByTime,getMyDispatches, getCurrentLocation,createLogisticsProduct,logLogisticsCompletion,updateProductStatus,updateLogisticsStatus,getLogisticsDealsByMobile,rejectLogisticsDeal,handleDispatchWebhook } from '../controllers/logisticController.js';
 
 const logisticRoutes = new Hono();
 
@@ -17,5 +17,9 @@ logisticRoutes.put('/update-status', updateLogisticsStatus);
 
 logisticRoutes.post('/reject', rejectLogisticsDeal);
 logisticRoutes.post('/complete', logLogisticsCompletion);
+
+
+logisticRoutes.post('/dispatch-webhook', handleDispatchWebhook);
+logisticRoutes.get('/my-dispatches', getMyDispatches);
 
 export default logisticRoutes;

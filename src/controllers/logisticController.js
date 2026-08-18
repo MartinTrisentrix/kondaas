@@ -414,3 +414,80 @@ export const logLogisticsCompletion = async (c) => {
     return c.json({ success: false, error: "Internal server error" }, 500);
   }
 };
+
+
+export const handleDispatchWebhook = async (c) => {
+  try {
+    const payload = await c.req.json();
+
+    // Basic validation
+    if (!payload.dispatch_number) {
+      return c.json({ error: "dispatch_number is required!" }, 400);
+    }
+
+    const dispatchDoc = {
+      ...payload,
+      assigned_to: payload.driver_mobile || payload.assigned_to || null,
+      updatedAt: new Date(),
+    };
+
+    return await withDatabase(MONGODB_URI, async (db) => {
+      const collection = db.collection("dispatches");
+
+      // Upsert so re-triggers update existing dispatches instead of duplicating
+      const result = await collection.updateOne(
+        { dispatch_number: payload.dispatch_number },
+        { 
+          $set: dispatchDoc, 
+          $setOnInsert: { createdAt: new Date() } 
+        },
+        { upsert: true }
+      );
+
+      return c.json({
+        success: true,
+        message: "Dispatch webhook processed successfully",
+        matchedCount: result.matchedCount,
+        upsertedId: result.upsertedId,
+      }, 200);
+    });
+
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+};
+
+
+export const getMyDispatches = async (c) => {
+  try {
+    const driverMobile = c.req.query("driver_mobile") || c.req.query("assigned_to");
+
+    if (!driverMobile) {
+      return c.json({ error: "driver_mobile or assigned_to is required" }, 400);
+    }
+
+    return await withDatabase(MONGODB_URI, async (db) => {
+      const collection = db.collection("dispatches");
+
+      // Query by driver_mobile or assigned_to, sorted by newest first
+      const dispatches = await collection
+        .find({
+          $or: [
+            { driver_mobile: driverMobile },
+            { assigned_to: driverMobile }
+          ]
+        })
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      return c.json({
+        success: true,
+        count: dispatches.length,
+        data: dispatches,
+      }, 200);
+    });
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+};
+
