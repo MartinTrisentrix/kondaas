@@ -22,6 +22,7 @@ export const fetchDeyeStationInfo = async (stationId, token, db, getKeys) => {
     const data = response.data;
     if (!data.success) throw new Error(data.msg || "Failed to fetch station list");
 
+    // Find the specific station in the list
     const stations = data.stationList || [];
     const targetStation = stations.find(s => Number(s.id) === Number(stationId));
 
@@ -78,15 +79,27 @@ export const getInternalDeyeToken = async (db, email, password, getKeys) => {
 /**
  * Fetch Historical / Metric Data from Deye via /v1.0/device/history
  */
-export const fetchDeyeHistory = async ({ deviceSn, timeType, startTime, endTime, token, db, getKeys }) => {
+export const fetchDeyeHistory = async ({ 
+  deviceSn, 
+  timeType, 
+  startTime, 
+  endTime, 
+  startAt, 
+  endAt, 
+  token 
+}) => {
   try {
     const granularity = Number(timeType); // 1: Day, 2: Days/Month, 3: Months/Year, 4: Years
+    
+    // Resolve start and end dates with robust fallbacks
+    const resolvedStartAt = startAt || startTime;
+    const resolvedEndAt = endAt || endTime || resolvedStartAt;
 
     const payload = {
       deviceSn,
       granularity,
-      startAt: startTime,
-      endAt: endTime
+      startAt: resolvedStartAt,
+      endAt: resolvedEndAt
     };
 
     if (granularity === 1) {
@@ -109,5 +122,31 @@ export const fetchDeyeHistory = async ({ deviceSn, timeType, startTime, endTime,
     const errorMsg = error.response?.data?.msg || error.message;
     console.error("❌ Deye History Utility Error:", errorMsg);
     throw new Error(`Failed to fetch Deye history: ${errorMsg}`);
+  }
+};
+
+/**
+ * Fetch Real-Time / Latest Device Metrics
+ */
+export const fetchDeyeLatestData = async (deviceSn, token) => {
+  try {
+    const response = await axios.post(
+      `${DEYE_BASE_URL}/v1.0/device/latest`,
+      { deviceList: [deviceSn] },
+      {
+        headers: {
+          'Authorization': `bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const data = response.data;
+    if (!data.success) throw new Error(data.msg || "Failed to fetch real-time device metrics");
+
+    return data.deviceDataList?.[0]?.dataList || [];
+  } catch (error) {
+    const errorMsg = error.response?.data?.msg || error.message;
+    throw new Error(`Failed to fetch latest Deye device data: ${errorMsg}`);
   }
 };

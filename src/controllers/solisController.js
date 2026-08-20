@@ -2,69 +2,90 @@ import { withDatabase, getSystemKeys } from '../utils/config.js';
 import SolarExportCalculator from '../utils/SolarExportCalculator.js';
 import { SolarParser } from '../utils/SolarParser.js';
 import {
-  getInternalDeyeToken,
-  fetchDeyeStationInfo,
-  fetchDeyeHistory,
-  fetchDeyeLatestData
-} from '../utils/deyeApi.js';
+  fetchSolisStationList,
+  fetchSolisStationDetail,
+  fetchSolisInverterList,
+  fetchSolisStationHistory,
+  fetchSolisStationAll
+} from '../utils/solisApi.js';
 
-const DEYE_BASE_URL = "https://india-developer.deyecloud.com";
 const MONGODB_URI = process.env.MONGODB_URI;
-
 
 const getKeys = async (db) => {
   const keys = await getSystemKeys(db);
-  return keys.deye || keys.solarman || keys;
+  return keys.solis || keys;
 };
 
-export const getDeyeStations = async (c) => {
+
+export const getSolisStations = async (c) => {
   try {
     const incomingSecurityToken = c.req.header('x-auth-token');
     const incomingDeviceId = c.req.header('x-device-id');
-    const { phoneNo } = await c.req.json();
+    
+    // Accept email, inverter SN, or stationId from request
+    const { phoneNo, email, deviceSn, stationName, stationId } = await c.req.json();
 
-    if (!incomingSecurityToken) return c.json({ error: "Unauthorized: No security token provided" }, 401);
-    if (!incomingDeviceId) return c.json({ error: "Unauthorized: No deviceId provided in headers" }, 401);
-    if (!phoneNo) return c.json({ error: "phoneNo is required in the request body" }, 400);
+    if (!incomingSecurityToken) return c.json({ error: "Unauthorized" }, 401);
+    if (!phoneNo) return c.json({ error: "phoneNo is required" }, 400);
 
     return await withDatabase(MONGODB_URI, async (db) => {
       const user = await db.collection("userDetails").findOne({ _id: phoneNo });
       if (!user) return c.json({ error: "User profile not found" }, 404);
 
-      const devicesList = user.PlatformInfo?.devices || [];
-      const currentDeviceSession = devicesList.find(d => d.deviceId === incomingDeviceId);
-      const storedToken = currentDeviceSession?.authToken;
-
-      if (!storedToken || storedToken !== incomingSecurityToken) {
-        return c.json({ error: "Unauthorized: Invalid security token" }, 401);
+      // 1. Direct single lookup if stationId is already known
+      if (stationId) {
+        const singlePlant = await fetchSolisStationDetail(stationId, db, getKeys);
+        return c.json({ success: true, stations: [singlePlant] });
       }
 
-      if (!user.UserInfo?.email || !user.UserInfo?.password) {
-        return c.json({ error: "Deye credentials missing on profile" }, 404);
+      // 2. Otherwise search the master list
+      const solisResponse = await fetchSolisStationList(db, getKeys, 1, 100);
+      const allStations = solisResponse.data?.page?.records || solisResponse.data?.records || [];
+
+      const searchEmail = (email || user.UserInfo?.email || "").toLowerCase().trim();
+      const searchSn = (deviceSn || "").toLowerCase().trim();
+      const searchName = (stationName || "").toLowerCase().trim();
+
+      // Flexible matching cascade
+      const matchedStations = allStations.filter(station => {
+        const matchEmail = searchEmail && station.userEmail && station.userEmail.toLowerCase().trim() === searchEmail;
+        const matchSn = searchSn && station.sno && station.sno.toLowerCase().trim() === searchSn;
+        const matchName = searchName && station.stationName && station.stationName.toLowerCase().trim().includes(searchName);
+
+        return matchEmail || matchSn || matchName;
+      });
+
+      if (matchedStations.length === 0) {
+        return c.json({
+          message: "No Solis plant matched. Please provide your Inverter Serial Number or registered Plant Name.",
+          stations: []
+        });
       }
 
-      const token = await getInternalDeyeToken(db, user.UserInfo.email, user.UserInfo.password, getKeys);
+      // Save matched station to user's MongoDB record
+      const formattedDeviceList = matchedStations.map(station => ({
+        id: Number(station.id) || station.id,
+        name: station.stationName,
+        deviceSn: station.sno || "",
+        stationId: station.id,
+        capacityKw: Number(station.capacity || 0),
+        state: station.regionStr || "",
+        operationalTimestamp: station.createDate ? Math.floor(station.createDate / 1000) : null
+      }));
 
-      const response = await fetch(
-        `${DEYE_BASE_URL}/v1.0/station/list`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `bearer ${token}`
-          },
-          body: JSON.stringify({ page: 1, size: 10 })
+      await db.collection("userDetails").updateOne(
+        { _id: phoneNo },
+        { 
+          $set: { 
+            devicelist: formattedDeviceList,
+            "UserInfo.state": matchedStations[0].regionStr || user.UserInfo?.state
+          } 
         }
       );
 
-      const data = await response.json();
-      if (!data.success) {
-        return c.json({ error: data.msg || "Failed to fetch stations", raw: data }, 400);
-      }
-
       return c.json({
-        message: "Stations retrieved successfully",
-        stations: data.stationList || []
+        success: true,
+        stations: matchedStations
       });
     });
   } catch (err) {
@@ -72,50 +93,40 @@ export const getDeyeStations = async (c) => {
   }
 };
 
-//helper function to fetch Deye station details by stationId
-export const getDeyeDataCore = async (db, user, deviceSn, timeType, startTime, endTime) => {
+/**
+ * 2. Pure Core Helper Function for Solis API Calls (Bypasses Hono Context)
+ */
+export const getSolisDataCore = async (db, user, stationId, timeType, startTime, endTime) => {
   try {
-    if (!user.UserInfo?.email || !user.UserInfo?.password) {
-      throw new Error("Deye credentials missing on profile");
-    }
-
-    const token = await getInternalDeyeToken(
-      db,
-      user.UserInfo.email,
-      user.UserInfo.password,
-      getKeys
-    );
-
-    const data = await fetchDeyeHistory({
-      deviceSn,
+    const data = await fetchSolisStationHistory({
+      stationId,
       timeType: Number(timeType),
       startTime,
       endTime,
-      token,
       db,
       getKeys
     });
 
-    if (!data.success) {
-      throw new Error(data.msg || "Deye External API Request Failed");
+    if (data.code !== "0" && data.code !== 0 && !data.success) {
+      throw new Error(data.msg || data.message || "Solis External API Request Failed");
     }
 
     return data;
   } catch (error) {
-    console.error("❌ Error in getDeyeDataCore helper:", error.message);
+    console.error("❌ Error in getSolisDataCore helper:", error.message);
     throw error;
   }
 };
 
 /**
- * 6. Historical Data with Multi-Device Auth, Caching & Auto-Inverter SN Lookup
+ * 3. Historical Station Data with Multi-Device Auth & Caching Layer
  */
-export const getDeyeHistory = async (c) => {
+export const getSolisHistory = async (c) => {
   try {
     const incomingSecurityToken = c.header('x-auth-token') || c.req.header('x-auth-token');
     const incomingDeviceId = c.header('x-device-id') || c.req.header('x-device-id');
 
-    const { stationId, deviceSn, timeType, startTime, endTime, phoneNo } = await c.req.json();
+    const { stationId, timeType, startTime, endTime, phoneNo } = await c.req.json();
 
     if (!incomingSecurityToken) return c.json({ error: "Unauthorized: No security token provided" }, 401);
     if (!incomingDeviceId) return c.json({ error: "Unauthorized: No deviceId provided in headers" }, 401);
@@ -138,12 +149,8 @@ export const getDeyeHistory = async (c) => {
         return c.json({ error: "Unauthorized: Invalid security token configuration" }, 401);
       }
 
-      if (!user.UserInfo?.email || !user.UserInfo?.password) {
-        return c.json({ error: "Deye credentials missing on profile" }, 404);
-      }
-
       const isDayRequest = Number(timeType) === 1;
-      const cacheKey = `history_${timeType}_${startTime}_${endTime}`;
+      const cacheKey = `history_${timeType}_${startTime}_${endTime || startTime}`;
 
       if (!isDayRequest) {
         const cache = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
@@ -165,67 +172,13 @@ export const getDeyeHistory = async (c) => {
         }
       }
 
-      // 🔍 SELF-HEALING: Extract or dynamically fetch Inverter Serial Number
-      let targetDeviceSn = deviceSn || user.devicelist?.find(d => Number(d.id) === Number(stationId))?.deviceSn;
-
-      if (!targetDeviceSn || targetDeviceSn.trim() === "") {
-        const token = await getInternalDeyeToken(db, user.UserInfo.email, user.UserInfo.password, getKeys);
-        
-        const deviceRes = await fetch(`${DEYE_BASE_URL}/v1.0/station/device`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `bearer ${token}`
-          },
-          body: JSON.stringify({ stationIds: [Number(stationId)], page: 1, size: 20 })
-        });
-        const devData = await deviceRes.json();
-        const devices = devData.deviceListItems || devData.deviceList || [];
-        const inverter = devices.find(d => d.deviceType === "INVERTER") || devices[0];
-
-        if (inverter?.deviceSn) {
-          targetDeviceSn = inverter.deviceSn;
-          // Persist found deviceSn to MongoDB devicelist
-          await db.collection("userDetails").updateOne(
-            { _id: phoneNo, "devicelist.id": Number(stationId) },
-            { $set: { "devicelist.$.deviceSn": inverter.deviceSn } }
-          );
-        }
-      }
-
-      if (!targetDeviceSn) {
-        return c.json({ error: "Device SN (inverter serial number) could not be resolved." }, 400);
-      }
-
-      const data = await getDeyeDataCore(db, user, targetDeviceSn, timeType, startTime, endTime);
-      const rawItems = data.deviceDataList || data.dataList || [];
+      const historyRes = await getSolisDataCore(db, user, stationId, timeType, startTime, endTime);
+      const rawItems = historyRes?.data || [];
 
       if (isDayRequest) {
-        let computedDayUnits = 0;
-
-        try {
-          const currentLifetimeTotal = Number(data.generationTotal ?? 0);
-          const historyCacheDoc = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
-          const midnightBaselineTotal = Number(historyCacheDoc?.dayStartBaselineTotal ?? 0);
-
-          if (currentLifetimeTotal > 0 && midnightBaselineTotal > 0) {
-            computedDayUnits = Number((currentLifetimeTotal - midnightBaselineTotal).toFixed(2));
-          } else {
-            let maxVal = 0;
-            for (const item of rawItems) {
-              const val = Number(item.generationValue ?? item.value ?? 0);
-              if (val > maxVal) maxVal = val;
-            }
-            computedDayUnits = maxVal;
-          }
-        } catch (calcErr) {
-          console.error("⚠️ Failed calculating live units via total fallback:", calcErr.message);
-        }
-
         return c.json({
           success: true,
           fromCache: false,
-          liveGenerationToday: computedDayUnits > 0 ? computedDayUnits : 0,
           data: rawItems
         });
       }
@@ -257,9 +210,9 @@ export const getDeyeHistory = async (c) => {
 };
 
 /**
- * 7. Calculate Cumulative & Monthly Solar Savings for Deye Users
+ * 4. Calculate Cumulative & Monthly Solar Savings for Solis Users
  */
-export const calculateDeyeUserSavings = async (c) => {
+export const calculateSolisUserSavings = async (c) => {
   try {
     const incomingToken = c.req.header('x-auth-token');
     const headerDeviceId = c.req.header('x-device-id');
@@ -285,10 +238,6 @@ export const calculateDeyeUserSavings = async (c) => {
         return c.json({ error: "Unauthorized: Invalid security token" }, 401);
       }
 
-      if (!user.UserInfo?.email || !user.UserInfo?.password) {
-        return c.json({ error: "Deye credentials missing on profile" }, 404);
-      }
-
       let targetDevice = null;
       if (selectedStationId) {
         targetDevice = user.devicelist?.find(d => String(d.id) === String(selectedStationId));
@@ -300,7 +249,7 @@ export const calculateDeyeUserSavings = async (c) => {
       const stationId = targetDevice?.id;
       if (!stationId) return c.json({ error: "No solar station linked or found match" }, 404);
 
-      // 🕒 Cache check
+      // 🕒 24-Hour Cache Check
       const cache = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
       if (cache && cache.lastCalculatedAt) {
         const lastCachedTime = new Date(cache.lastCalculatedAt);
@@ -322,43 +271,8 @@ export const calculateDeyeUserSavings = async (c) => {
         }
       }
 
-      // Generate Deye Token
-      const token = await getInternalDeyeToken(db, user.UserInfo.email, user.UserInfo.password, getKeys);
-
-      // 🔍 SELF-HEALING: Inverter Serial Number Lookup if missing or empty string
-      let targetDeviceSn = (targetDevice?.deviceSn && targetDevice.deviceSn.trim() !== "") 
-        ? targetDevice.deviceSn 
-        : data.deviceSn;
-
-      if (!targetDeviceSn || targetDeviceSn.trim() === "") {
-        const deviceRes = await fetch(`${DEYE_BASE_URL}/v1.0/station/device`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `bearer ${token}`
-          },
-          body: JSON.stringify({ stationIds: [Number(stationId)], page: 1, size: 20 })
-        });
-        const devData = await deviceRes.json();
-        const devices = devData.deviceListItems || devData.deviceList || [];
-        const inverter = devices.find(d => d.deviceType === "INVERTER") || devices[0];
-
-        if (inverter?.deviceSn) {
-          targetDeviceSn = inverter.deviceSn;
-          // Auto-persist deviceSn to MongoDB
-          await db.collection("userDetails").updateOne(
-            { _id: phoneNo, "devicelist.id": Number(stationId) },
-            { $set: { "devicelist.$.deviceSn": inverter.deviceSn } }
-          );
-        }
-      }
-
-      if (!targetDeviceSn) {
-        return c.json({ error: "Could not resolve Inverter Serial Number for station." }, 404);
-      }
-
-      // Station info & location parsing
-      const rawStationData = await fetchDeyeStationInfo(stationId, token, db, getKeys);
+      // Station info & Location Parsing
+      const rawStationData = await fetchSolisStationDetail(stationId, db, getKeys);
       const parsed = SolarParser.parse(rawStationData);
 
       if (!parsed?.state) {
@@ -371,17 +285,32 @@ export const calculateDeyeUserSavings = async (c) => {
         return c.json({ error: `Tariff not found for: ${stateId}` }, 404);
       }
 
-      if (user.UserInfo.state !== parsed.state) {
+      if (user.UserInfo?.state !== parsed.state) {
         await db.collection("userDetails").updateOne(
           { _id: phoneNo },
           { $set: { "UserInfo.state": parsed.state } }
         );
       }
 
-      // Fallback timestamp logic if operationalTimestamp is null
+      // Auto-inverter SN lookup if missing
+      if (!targetDevice?.deviceSn || targetDevice.deviceSn.trim() === "") {
+        try {
+          const inverters = await fetchSolisInverterList(stationId, db, getKeys);
+          if (inverters.length > 0 && inverters[0].sn) {
+            await db.collection("userDetails").updateOne(
+              { _id: phoneNo, "devicelist.id": Number(stationId) },
+              { $set: { "devicelist.$.deviceSn": inverters[0].sn } }
+            );
+          }
+        } catch (snErr) {
+          console.warn("⚠️ Solis inverter SN auto-fetch skipped:", snErr.message);
+        }
+      }
+
+      // Operational date resolution
       const startTs = targetDevice?.operationalTimestamp
-        || rawStationData?.startOperatingTime
-        || rawStationData?.createTime
+        || rawStationData?.createDate
+        || rawStationData?.operTimestamp
         || targetDevice?.createdDate
         || Math.floor(Date.now() / 1000);
 
@@ -398,20 +327,16 @@ export const calculateDeyeUserSavings = async (c) => {
         const month = String(cursor.getMonth() + 1).padStart(2, '0');
         const monthKey = `${year}-${month}`;
 
-        const deyeHistoryRes = await fetchDeyeHistory({
-          deviceSn: targetDeviceSn,
-          timeType: 3,
-          startTime: monthKey,
-          endTime: monthKey,
-          startAt: monthKey,
-          endAt: monthKey,
-          token,
-          db,
-          getKeys
-        });
+        const monthRes = await getSolisDataCore(db, user, stationId, 3, monthKey, monthKey);
 
-        const historyItems = deyeHistoryRes?.deviceDataList || deyeHistoryRes?.dataList || [];
-        const rawUnits = Number(historyItems[0]?.generationValue ?? historyItems[0]?.value ?? 0);
+        const monthData = monthRes?.data || [];
+        let rawUnits = 0;
+        if (Array.isArray(monthData)) {
+          rawUnits = monthData.reduce((acc, item) => acc + Number(item.energy || item.value || 0), 0);
+        } else if (typeof monthData === 'object') {
+          rawUnits = Number(monthData.energy || monthData.value || 0);
+        }
+
         cumulativeUnits += rawUnits;
 
         const cost = SolarExportCalculator.calculateMonthlyCredit(rawUnits, tariffTemplate, monthKey);
@@ -425,17 +350,15 @@ export const calculateDeyeUserSavings = async (c) => {
         cursor.setMonth(cursor.getMonth() + 1);
       }
 
-      // Lifetime units fallback check
+      // Lifetime Odometer benchmark via /v1/api/stationAll
       let trueApiLifetimeUnits = 0;
       try {
-        const liveMetrics = await fetchDeyeLatestData(targetDeviceSn, token);
-        const totalProductionObj = liveMetrics.find(m => m.key === "TotalActiveProduction");
-
-        if (totalProductionObj && totalProductionObj.value !== undefined) {
-          trueApiLifetimeUnits = Number(totalProductionObj.value);
+        const stationAllRes = await fetchSolisStationAll(stationId, db, getKeys);
+        if (stationAllRes?.data?.allEnergy !== undefined) {
+          trueApiLifetimeUnits = Number(stationAllRes.data.allEnergy);
         }
-      } catch (liveErr) {
-        console.error("⚠️ Real-time lifetime unit check skipped:", liveErr.message);
+      } catch (allErr) {
+        console.warn("⚠️ Solis allEnergy odometer check skipped:", allErr.message);
       }
 
       const finalCumulativeUnits = (trueApiLifetimeUnits > cumulativeUnits)
@@ -474,8 +397,7 @@ export const calculateDeyeUserSavings = async (c) => {
       });
     });
   } catch (err) {
-    console.error("❌ Deye Savings Calculation Error:", err.message);
+    console.error("❌ Solis Savings Calculation Error:", err.message);
     return c.json({ error: err.message }, 500);
   }
 };
-
