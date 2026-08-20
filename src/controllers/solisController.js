@@ -34,7 +34,7 @@ export const getSolisStations = async (c) => {
 
       // 1. Direct single lookup if stationId is already known
       if (stationId) {
-        const singlePlant = await fetchSolisStationDetail(stationId, db, getKeys);
+        const singlePlant = await fetchSolisStationDetail(String(stationId), db, getKeys);
         return c.json({ success: true, stations: [singlePlant] });
       }
 
@@ -62,12 +62,12 @@ export const getSolisStations = async (c) => {
         });
       }
 
-      // Save matched station to user's MongoDB record
+      // 🛡️ Save matched station preserving string IDs to prevent 64-bit float truncation
       const formattedDeviceList = matchedStations.map(station => ({
-        id: Number(station.id) || station.id,
+        id: String(station.id),
         name: station.stationName,
         deviceSn: station.sno || "",
-        stationId: station.id,
+        stationId: String(station.id),
         capacityKw: Number(station.capacity || 0),
         state: station.regionStr || "",
         operationalTimestamp: station.createDate ? Math.floor(station.createDate / 1000) : null
@@ -98,8 +98,10 @@ export const getSolisStations = async (c) => {
  */
 export const getSolisDataCore = async (db, user, stationId, timeType, startTime, endTime) => {
   try {
-    const data = await fetchSolisStationHistory({
-      stationId,
+    const stringStationId = String(stationId);
+
+    const response = await fetchSolisStationHistory({
+      stationId: stringStationId,
       timeType: Number(timeType),
       startTime,
       endTime,
@@ -107,20 +109,63 @@ export const getSolisDataCore = async (db, user, stationId, timeType, startTime,
       getKeys
     });
 
-    if (data.code !== "0" && data.code !== 0 && !data.success) {
-      throw new Error(data.msg || data.message || "Solis External API Request Failed");
+    if (!response) {
+      throw new Error("No response received from Solis Cloud API");
     }
 
-    return data;
+    // 🛡️ Flexible validation: Solis considers '0', 0, or success: true as OK
+    const isSuccess = response.success === true || response.code === "0" || response.code === 0;
+
+    if (!isSuccess) {
+      throw new Error(response.msg || response.message || "Solis External API Request Failed");
+    }
+
+    return response;
   } catch (error) {
     console.error("❌ Error in getSolisDataCore helper:", error.message);
     throw error;
   }
 };
 
+
 /**
- * 3. Historical Station Data with Multi-Device Auth & Caching Layer
+ * Normalizes input date to local calendar format expected by Solis API
  */
+/**
+ * Normalizes input date to local calendar format (IST/Local aware)
+ */
+const formatSolisDate = (rawDate, timeType) => {
+  let d;
+  if (!rawDate) {
+    d = new Date();
+  } else if (typeof rawDate === 'number' || !isNaN(Number(rawDate))) {
+    const num = Number(rawDate);
+    d = new Date(num > 1e11 ? num : num * 1000);
+  } else if (typeof rawDate === 'string' && rawDate.length === 10 && rawDate.includes('-')) {
+    const parts = rawDate.split('-');
+    const numType = Number(timeType);
+    if (numType === 1) return rawDate;
+    if (numType === 2 || numType === 3) return `${parts[0]}-${parts[1]}`;
+    return parts[0];
+  } else {
+    d = new Date(rawDate);
+  }
+
+  if (isNaN(d.getTime())) {
+    d = new Date();
+  }
+
+  // Use local date values to prevent UTC rollback
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+
+  const numType = Number(timeType);
+  if (numType === 1) return `${yyyy}-${mm}-${dd}`;
+  if (numType === 2 || numType === 3) return `${yyyy}-${mm}`;
+  return `${yyyy}`;
+};
+
 export const getSolisHistory = async (c) => {
   try {
     const incomingSecurityToken = c.header('x-auth-token') || c.req.header('x-auth-token');
@@ -134,9 +179,16 @@ export const getSolisHistory = async (c) => {
     if (!stationId || !timeType) return c.json({ error: "Station ID and TimeType are required!" }, 400);
 
     return await withDatabase(MONGODB_URI, async (db) => {
+      const stringStationId = String(stationId);
+
       const user = await db.collection("userDetails").findOne({
         _id: phoneNo,
-        "devicelist.id": Number(stationId)
+        $or: [
+          { "devicelist.stationId": stringStationId },
+          { "devicelist.stationId": stationId },
+          { "devicelist.id": stringStationId },
+          { "devicelist.id": stationId }
+        ]
       });
 
       if (!user) return c.json({ error: "Unauthorized: Invalid profile or unlinked station" }, 401);
@@ -149,11 +201,13 @@ export const getSolisHistory = async (c) => {
         return c.json({ error: "Unauthorized: Invalid security token configuration" }, 401);
       }
 
+      const formattedStartTime = formatSolisDate(startTime, timeType);
       const isDayRequest = Number(timeType) === 1;
-      const cacheKey = `history_${timeType}_${startTime}_${endTime || startTime}`;
+      const cacheKey = `history_${timeType}_${formattedStartTime}`;
 
+      // Cache validation
       if (!isDayRequest) {
-        const cache = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
+        const cache = await db.collection("solarSavingsCache").findOne({ _id: stringStationId });
 
         if (cache && cache.historyCache?.[cacheKey]) {
           const storedChart = cache.historyCache[cacheKey];
@@ -162,7 +216,7 @@ export const getSolisHistory = async (c) => {
 
           const hoursPassed = (currentTime - lastCachedTime) / (1000 * 60 * 60);
 
-          if (hoursPassed < 24) {
+          if (hoursPassed < 24 && Array.isArray(storedChart.data) && storedChart.data.length > 0) {
             return c.json({
               success: true,
               fromCache: true,
@@ -172,8 +226,17 @@ export const getSolisHistory = async (c) => {
         }
       }
 
-      const historyRes = await getSolisDataCore(db, user, stationId, timeType, startTime, endTime);
-      const rawItems = historyRes?.data || [];
+      const historyRes = await getSolisDataCore(db, user, stringStationId, timeType, formattedStartTime, endTime);
+
+      // Unwrap array if nested inside data or data.records
+      let rawItems = [];
+      if (Array.isArray(historyRes?.data)) {
+        rawItems = historyRes.data;
+      } else if (Array.isArray(historyRes?.data?.records)) {
+        rawItems = historyRes.data.records;
+      } else if (historyRes?.data) {
+        rawItems = historyRes.data;
+      }
 
       if (isDayRequest) {
         return c.json({
@@ -183,20 +246,22 @@ export const getSolisHistory = async (c) => {
         });
       }
 
-      const chartDataToCache = {
-        data: rawItems,
-        lastCalculatedAt: new Date().toISOString()
-      };
+      if (Array.isArray(rawItems) && rawItems.length > 0) {
+        const chartDataToCache = {
+          data: rawItems,
+          lastCalculatedAt: new Date().toISOString()
+        };
 
-      await db.collection("solarSavingsCache").updateOne(
-        { _id: String(stationId) },
-        {
-          $set: {
-            [`historyCache.${cacheKey}`]: chartDataToCache
-          }
-        },
-        { upsert: true }
-      );
+        await db.collection("solarSavingsCache").updateOne(
+          { _id: stringStationId },
+          {
+            $set: {
+              [`historyCache.${cacheKey}`]: chartDataToCache
+            }
+          },
+          { upsert: true }
+        );
+      }
 
       return c.json({
         success: true,
@@ -209,9 +274,7 @@ export const getSolisHistory = async (c) => {
   }
 };
 
-/**
- * 4. Calculate Cumulative & Monthly Solar Savings for Solis Users
- */
+
 export const calculateSolisUserSavings = async (c) => {
   try {
     const incomingToken = c.req.header('x-auth-token');
@@ -240,18 +303,23 @@ export const calculateSolisUserSavings = async (c) => {
 
       let targetDevice = null;
       if (selectedStationId) {
-        targetDevice = user.devicelist?.find(d => String(d.id) === String(selectedStationId));
+        const stringSelectedId = String(selectedStationId);
+        targetDevice = user.devicelist?.find(
+          d => String(d.id) === stringSelectedId || String(d.stationId) === stringSelectedId
+        );
       }
       if (!targetDevice) {
         targetDevice = user.devicelist?.find(d => d.isLastLoggedIn === true) || user.devicelist?.[0];
       }
 
-      const stationId = targetDevice?.id;
-      if (!stationId) return c.json({ error: "No solar station linked or found match" }, 404);
+      const rawStationId = targetDevice?.stationId || targetDevice?.id;
+      if (!rawStationId) return c.json({ error: "No solar station linked or found match" }, 404);
+      
+      const stringStationId = String(rawStationId);
 
-      // 🕒 24-Hour Cache Check
-      const cache = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
-      if (cache && cache.lastCalculatedAt) {
+      // 🕒 24-Hour Cache Check (Only if monthlyRecords has data)
+      const cache = await db.collection("solarSavingsCache").findOne({ _id: stringStationId });
+      if (cache && cache.lastCalculatedAt && cache.monthlyRecords && Object.keys(cache.monthlyRecords).length > 0) {
         const lastCachedTime = new Date(cache.lastCalculatedAt);
         const currentTime = new Date();
         const hoursPassed = (currentTime - lastCachedTime) / (1000 * 60 * 60);
@@ -261,7 +329,7 @@ export const calculateSolisUserSavings = async (c) => {
             success: true,
             fromCache: true,
             data: {
-              stationId: Number(stationId),
+              stationId: stringStationId,
               state: cache.state,
               cumulativeUnits: cache.cumulativeUnits,
               cumulativeCost: cache.cumulativeCost,
@@ -272,7 +340,7 @@ export const calculateSolisUserSavings = async (c) => {
       }
 
       // Station info & Location Parsing
-      const rawStationData = await fetchSolisStationDetail(stationId, db, getKeys);
+      const rawStationData = await fetchSolisStationDetail(stringStationId, db, getKeys);
       const parsed = SolarParser.parse(rawStationData);
 
       if (!parsed?.state) {
@@ -295,10 +363,18 @@ export const calculateSolisUserSavings = async (c) => {
       // Auto-inverter SN lookup if missing
       if (!targetDevice?.deviceSn || targetDevice.deviceSn.trim() === "") {
         try {
-          const inverters = await fetchSolisInverterList(stationId, db, getKeys);
+          const inverters = await fetchSolisInverterList(stringStationId, db, getKeys);
           if (inverters.length > 0 && inverters[0].sn) {
             await db.collection("userDetails").updateOne(
-              { _id: phoneNo, "devicelist.id": Number(stationId) },
+              { 
+                _id: phoneNo, 
+                $or: [
+                  { "devicelist.stationId": stringStationId },
+                  { "devicelist.stationId": rawStationId },
+                  { "devicelist.id": stringStationId },
+                  { "devicelist.id": rawStationId }
+                ]
+              },
               { $set: { "devicelist.$.deviceSn": inverters[0].sn } }
             );
           }
@@ -320,6 +396,7 @@ export const calculateSolisUserSavings = async (c) => {
       let cumulativeUnits = 0;
       let cumulativeCost = 0;
 
+      // Start from operational month
       let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
 
       while (cursor <= now) {
@@ -327,14 +404,28 @@ export const calculateSolisUserSavings = async (c) => {
         const month = String(cursor.getMonth() + 1).padStart(2, '0');
         const monthKey = `${year}-${month}`;
 
-        const monthRes = await getSolisDataCore(db, user, stationId, 3, monthKey, monthKey);
+        // Fetch monthly history from Solis (timeType = 3)
+        const monthRes = await getSolisDataCore(db, user, stringStationId, 3, monthKey, monthKey);
 
-        const monthData = monthRes?.data || [];
+        // 🔍 Robust item unwrapping
+        let rawList = [];
+        if (Array.isArray(monthRes?.data)) {
+          rawList = monthRes.data;
+        } else if (Array.isArray(monthRes?.data?.records)) {
+          rawList = monthRes.data.records;
+        } else if (Array.isArray(monthRes)) {
+          rawList = monthRes;
+        }
+
         let rawUnits = 0;
-        if (Array.isArray(monthData)) {
-          rawUnits = monthData.reduce((acc, item) => acc + Number(item.energy || item.value || 0), 0);
-        } else if (typeof monthData === 'object') {
-          rawUnits = Number(monthData.energy || monthData.value || 0);
+        if (rawList.length > 0) {
+          rawUnits = rawList.reduce((acc, item) => {
+            const val = Number(item.energy ?? item.energyPrc ?? item.eToday ?? item.value ?? item.power ?? 0);
+            return acc + (isNaN(val) ? 0 : val);
+          }, 0);
+        } else if (monthRes?.data?.monthEnergy !== undefined) {
+          // If Solis returned single summary object with monthEnergy
+          rawUnits = Number(monthRes.data.monthEnergy || 0);
         }
 
         cumulativeUnits += rawUnits;
@@ -353,7 +444,7 @@ export const calculateSolisUserSavings = async (c) => {
       // Lifetime Odometer benchmark via /v1/api/stationAll
       let trueApiLifetimeUnits = 0;
       try {
-        const stationAllRes = await fetchSolisStationAll(stationId, db, getKeys);
+        const stationAllRes = await fetchSolisStationAll(stringStationId, db, getKeys);
         if (stationAllRes?.data?.allEnergy !== undefined) {
           trueApiLifetimeUnits = Number(stationAllRes.data.allEnergy);
         }
@@ -366,7 +457,7 @@ export const calculateSolisUserSavings = async (c) => {
         : cumulativeUnits;
 
       const savingsResult = {
-        state: parsed.state,
+        state: stateId,
         cumulativeUnits: Number(finalCumulativeUnits.toFixed(2)),
         cumulativeCost: Number(cumulativeCost.toFixed(2)),
         monthlyRecords,
@@ -374,7 +465,7 @@ export const calculateSolisUserSavings = async (c) => {
       };
 
       await db.collection("solarSavingsCache").updateOne(
-        { _id: String(stationId) },
+        { _id: stringStationId },
         {
           $set: {
             state: savingsResult.state,
@@ -391,7 +482,7 @@ export const calculateSolisUserSavings = async (c) => {
         success: true,
         fromCache: false,
         data: {
-          stationId: Number(stationId),
+          stationId: stringStationId,
           ...savingsResult
         }
       });

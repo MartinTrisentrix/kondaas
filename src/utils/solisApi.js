@@ -80,37 +80,52 @@ export const fetchSolisInverterList = async (stationId, db, getKeys, pageNo = 1,
 
 /**
  * Fetch Day/Month/Year Station Generation History
+  */
+
+/**
+ * Fetch Day/Month/Year Station Generation History
+ */
+/**
+ * Fetch Day/Month/Year Station Generation History from SolisCloud
  */
 export const fetchSolisStationHistory = async ({ stationId, timeType, startTime, db, getKeys }) => {
   const numTimeType = Number(timeType);
+  const cleanStationId = String(stationId);
 
-  // timeType 1 = Day (/v1/api/stationDay)
+  let endpoint = '';
+  let payload = {};
+
+  // 1 = Day (/v1/api/stationDay) -> Requires "YYYY-MM-DD" & timeZone
   if (numTimeType === 1) {
-    return await postSolisApi('/v1/api/stationDay', {
-      id: String(stationId),
+    endpoint = '/v1/api/stationDay';
+    payload = {
+      id: cleanStationId,
       money: "INR",
-      time: startTime, // YYYY-MM-DD
+      time: startTime,
       timeZone: 5.5
-    }, db, getKeys);
-  }
-
-  // timeType 3 = Month (/v1/api/stationMonth)
-  if (numTimeType === 3) {
-    return await postSolisApi('/v1/api/stationMonth', {
-      id: String(stationId),
+    };
+  } 
+  // 2 or 3 = Month (/v1/api/stationMonth) -> Requires "YYYY-MM"
+  else if (numTimeType === 2 || numTimeType === 3) {
+    endpoint = '/v1/api/stationMonth';
+    payload = {
+      id: cleanStationId,
       money: "INR",
-      month: startTime // YYYY-MM
-    }, db, getKeys);
+      month: startTime
+    };
+  } 
+  // 4 or Default = Year (/v1/api/stationYear) -> Requires "YYYY"
+  else {
+    endpoint = '/v1/api/stationYear';
+    payload = {
+      id: cleanStationId,
+      money: "INR",
+      year: startTime
+    };
   }
 
-  // timeType 4 = Year (/v1/api/stationYear)
-  return await postSolisApi('/v1/api/stationYear', {
-    id: String(stationId),
-    money: "INR",
-    year: startTime // YYYY
-  }, db, getKeys);
+  return await postSolisApi(endpoint, payload, db, getKeys);
 };
-
 /**
  * Fetch All-time cumulative generation details
  */

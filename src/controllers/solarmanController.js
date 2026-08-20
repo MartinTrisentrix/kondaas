@@ -150,7 +150,6 @@ export const getSolarmanDataCore = async (db, user, stationId, timeType, startTi
   }
 };
 
-// 📱 Your Original Mobile App Route Function (Fully Intact)
 export const getSolarmanHistory = async (c) => {
   try {
     // 🛡️ SECURITY FEATURES: Extracted cleanly from the mobile app request headers
@@ -163,37 +162,40 @@ export const getSolarmanHistory = async (c) => {
     if (!incomingSecurityToken) {
       return c.json({ error: "Unauthorized: No security token provided" }, 401);
     }
-
     if (!incomingDeviceId) {
       return c.json({ error: "Unauthorized: No deviceId provided in headers" }, 401);
     }
-
     if (!phoneNo) {
       return c.json({ error: "phoneNo is required in the request body" }, 400);
     }
-
     if (!stationId || !timeType) {
       return c.json({ error: "Station ID and TimeType are required!" }, 400);
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // 🛡️ SECURITY LOOKUP: Find user by phone and verify station ownership array link
+      const numStationId = Number(stationId);
+      const strStationId = String(stationId);
+
+      // 🛡️ POLYMORPHIC SECURITY LOOKUP: Safe against String & Number data types
       const user = await db.collection("userDetails").findOne({ 
         _id: phoneNo,
-        "devicelist.id": Number(stationId)
+        $or: [
+          { "devicelist.id": { $in: [numStationId, strStationId] } },
+          { "devicelist.stationId": { $in: [numStationId, strStationId] } }
+        ]
       });
 
       if (!user) {
         return c.json({ error: "Unauthorized: Invalid profile or unlinked station" }, 401);
       }
 
-      // 🛡️ MULTI-DEVICE SECURITY CHECK: Scan active device tracking array list using the header ID
+      // 🛡️ MULTI-DEVICE SECURITY CHECK: Scan active device tracking array list using header ID
       const devicesList = user.PlatformInfo?.devices || [];
       const currentDeviceSession = devicesList.find(d => d.deviceId === incomingDeviceId);
       const storedToken = currentDeviceSession?.authToken;
 
       if (!storedToken || storedToken !== incomingSecurityToken) {
-        console.error(`❌ Security Alert: Token mismatch or unregistered hardware configuration for user: ${phoneNo}, device: ${incomingDeviceId}`);
+        console.error(`❌ Security Alert: Token mismatch for user: ${phoneNo}, device: ${incomingDeviceId}`);
         return c.json({ error: "Unauthorized: Invalid security token configuration" }, 401);
       }
 
@@ -207,7 +209,7 @@ export const getSolarmanHistory = async (c) => {
       const cacheKey = `history_${timeType}_${startTime}_${endTime}`;
 
       if (!isDayRequest) {
-        const cache = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
+        const cache = await db.collection("solarSavingsCache").findOne({ _id: strStationId });
 
         if (cache && cache.historyCache?.[cacheKey]) {
           const storedChart = cache.historyCache[cacheKey];
@@ -216,7 +218,6 @@ export const getSolarmanHistory = async (c) => {
           
           const hoursPassed = (currentTime - lastCachedTime) / (1000 * 60 * 60);
 
-          // If this chart data was fetched less than 24 hours ago, return it immediately!
           if (hoursPassed < 24) {
             return c.json({
               success: true,
@@ -227,28 +228,22 @@ export const getSolarmanHistory = async (c) => {
         }
       } 
 
-      // 💥 LAYER 3: CACHE MISS -> FETCH FRESH DATA FROM EXTERNAL API VIA NEW HELPER
-      const data = await getSolarmanDataCore(db, user, stationId, timeType, startTime, endTime);
-
+      // 💥 LAYER 3: CACHE MISS -> FETCH FRESH DATA FROM EXTERNAL API VIA HELPER
+      const data = await getSolarmanDataCore(db, user, numStationId || stationId, timeType, startTime, endTime);
       const rawItems = data.stationDataItems || [];
 
-      // 2️⃣ ⚡ CRITICAL DAY FIXED: Compute today's active production using cumulative lifetime values
+      // ⚡ CRITICAL DAY: Compute today's active production using cumulative lifetime values
       if (isDayRequest) {
         let computedDayUnits = 0;
 
         try {
-          // 1. Grab the current instant cumulative generation total from your live records
           const currentLifetimeTotal = Number(data.generationTotal ?? 0);
-
-          // 2. Fetch the baseline generation total recorded at the start of today (Midnight) from your database
-          const historyCacheDoc = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
-          
+          const historyCacheDoc = await db.collection("solarSavingsCache").findOne({ _id: strStationId });
           const midnightBaselineTotal = Number(historyCacheDoc?.dayStartBaselineTotal ?? 0);
 
           if (currentLifetimeTotal > 0 && midnightBaselineTotal > 0) {
             computedDayUnits = Number((currentLifetimeTotal - midnightBaselineTotal).toFixed(2));
           } else {
-            // Fallback: If no database baseline exists yet, scan the history intervals safely
             let maxVal = 0;
             for (const item of rawItems) {
               const val = Number(item.generationValue ?? item.value ?? 0);
@@ -263,19 +258,19 @@ export const getSolarmanHistory = async (c) => {
         return c.json({
           success: true,
           fromCache: false,
-          liveGenerationToday: computedDayUnits > 0 ? computedDayUnits : 29.6, // Graceful fallback value
+          liveGenerationToday: computedDayUnits > 0 ? computedDayUnits : 29.6,
           data: rawItems
         });
       }
 
-      // 💾 SAVE TO DB CACHE (Strictly executed ONLY for Week, Month, and Year charts)
+      // 💾 SAVE TO DB CACHE (Week, Month, and Year charts)
       const chartDataToCache = {
         data: rawItems,
         lastCalculatedAt: new Date().toISOString()
       };
 
       await db.collection("solarSavingsCache").updateOne(
-        { _id: String(stationId) },
+        { _id: strStationId },
         { 
           $set: { 
             [`historyCache.${cacheKey}`]: chartDataToCache 
@@ -303,7 +298,7 @@ export const saveUserDetails = async (c) => {
     const headerDeviceId = c.req.header('x-device-id');
 
     const data = await c.req.json();
-    const mobile = data.UserInfo?.phoneNo;
+    const mobile = data.UserInfo?.phoneNo || data.phoneNo;
     
     const incomingDevice = data.PlatformInfo?.devices?.[0] || data.PlatformInfo?.device;
     const deviceId = headerDeviceId || incomingDevice?.deviceId;
@@ -320,11 +315,10 @@ export const saveUserDetails = async (c) => {
     }
 
     return await withDatabase(MONGODB_URI, async (db) => {
-      // Fetch the existing user profile
+      // Fetch existing user profile
       const existingUser = await db.collection("userDetails").findOne({ _id: mobile });
       
       let deviceExistsInDb = false;
-
       if (existingUser) {
         const devicesList = existingUser.PlatformInfo?.devices || [];
         const currentDeviceSession = devicesList.find(d => d.deviceId === deviceId);
@@ -372,6 +366,9 @@ export const saveUserDetails = async (c) => {
       setFields["PlatformInfo.devices"] = currentDevicesList;
       setFields.updatedAt = new Date();
 
+      // ⚡ MULTI-PROVIDER SUPPORT: solarman | deye | solis
+      const activeProvider = (data.UserInfo?.provider || existingUser?.UserInfo?.provider || "solarman").toLowerCase().trim();
+
       if (data.UserInfo) {
         const ui = data.UserInfo;
         if (ui.phoneNo)  setFields["UserInfo.phoneNo"]  = ui.phoneNo;
@@ -379,29 +376,42 @@ export const saveUserDetails = async (c) => {
         if (ui.password) setFields["UserInfo.password"] = ui.password;
         if (ui.name)     setFields["UserInfo.name"]     = ui.name;
         
-        // ⚡ MULTI-PROVIDER SUPPORT: solarman | deye | solis
-        if (ui.provider) {
-          setFields["UserInfo.provider"] = ui.provider.toLowerCase();
-        } else if (!existingUser?.UserInfo?.provider) {
-          setFields["UserInfo.provider"] = "solarman"; // default fallback
-        }
-
+        setFields["UserInfo.provider"] = activeProvider;
         setFields["UserInfo.role"] = existingUser?.UserInfo?.role || ui.role || "user";
       }
 
-      if (data.devicelist && data.devicelist.length > 0) {
-        const firstParsed = SolarParser.parse(data.devicelist[0]);
-        if (firstParsed.state) setFields["UserInfo.state"] = firstParsed.state;
-        
-        setFields.devicelist = data.devicelist.map((rawStation) => {
-          const parsed = SolarParser.parse(rawStation);
-          return {
-            ...rawStation,
-            operationalTimestamp: parsed.operationalTimestamp,
-            stationId: parsed.stationId,
-            capacityKw: parsed.capacityKw
-          };
-        });
+      // 🔄 Provider-Aware Device List Formatting
+      if (Array.isArray(data.devicelist)) {
+        if (data.devicelist.length === 0) {
+          setFields.devicelist = [];
+        } else {
+          const firstParsed = SolarParser.parse(data.devicelist[0]);
+          if (firstParsed.state) setFields["UserInfo.state"] = firstParsed.state;
+          
+          setFields.devicelist = data.devicelist.map((rawStation) => {
+            const parsed = SolarParser.parse(rawStation);
+            const rawId = parsed.stationId || rawStation.stationId || rawStation.id || "";
+
+            // 🎯 Provider-specific ID formatting:
+            // Solis -> String (19-digit snowflake ID)
+            // Solarman / Deye -> Number (standard safe integer)
+            const isSolis = activeProvider === "solis";
+            const targetId = isSolis 
+              ? String(rawId) 
+              : (Number(rawId) || rawId);
+
+            return {
+              ...rawStation,
+              id: targetId,
+              stationId: targetId,
+              deviceSn: rawStation.deviceSn || rawStation.sno || "",
+              name: rawStation.name || rawStation.stationName || "",
+              provider: activeProvider,
+              operationalTimestamp: parsed.operationalTimestamp || rawStation.operationalTimestamp || null,
+              capacityKw: parsed.capacityKw || Number(rawStation.capacityKw || rawStation.capacity || 0)
+            };
+          });
+        }
       }
 
       await db.collection("userDetails").updateOne(
@@ -412,7 +422,7 @@ export const saveUserDetails = async (c) => {
 
       return c.json({ 
         success: true, 
-        message: "Profile settings and active device session synced successfully" 
+        message: `Profile settings synced successfully for provider: ${activeProvider}` 
       });
     });
   } catch (err) {

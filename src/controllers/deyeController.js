@@ -123,9 +123,16 @@ export const getDeyeHistory = async (c) => {
     if (!stationId || !timeType) return c.json({ error: "Station ID and TimeType are required!" }, 400);
 
     return await withDatabase(MONGODB_URI, async (db) => {
+      const numStationId = Number(stationId);
+      const strStationId = String(stationId);
+
+      // 🛡️ Safe lookup matching either Number or String representation
       const user = await db.collection("userDetails").findOne({
         _id: phoneNo,
-        "devicelist.id": Number(stationId)
+        $or: [
+          { "devicelist.id": { $in: [numStationId, strStationId] } },
+          { "devicelist.stationId": { $in: [numStationId, strStationId] } }
+        ]
       });
 
       if (!user) return c.json({ error: "Unauthorized: Invalid profile or unlinked station" }, 401);
@@ -146,7 +153,7 @@ export const getDeyeHistory = async (c) => {
       const cacheKey = `history_${timeType}_${startTime}_${endTime}`;
 
       if (!isDayRequest) {
-        const cache = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
+        const cache = await db.collection("solarSavingsCache").findOne({ _id: strStationId });
 
         if (cache && cache.historyCache?.[cacheKey]) {
           const storedChart = cache.historyCache[cacheKey];
@@ -165,8 +172,10 @@ export const getDeyeHistory = async (c) => {
         }
       }
 
-      // 🔍 SELF-HEALING: Extract or dynamically fetch Inverter Serial Number
-      let targetDeviceSn = deviceSn || user.devicelist?.find(d => Number(d.id) === Number(stationId))?.deviceSn;
+      // 🔍 Dynamic SN Resolution
+      let targetDeviceSn = deviceSn || user.devicelist?.find(
+        d => String(d.id) === strStationId || String(d.stationId) === strStationId
+      )?.deviceSn;
 
       if (!targetDeviceSn || targetDeviceSn.trim() === "") {
         const token = await getInternalDeyeToken(db, user.UserInfo.email, user.UserInfo.password, getKeys);
@@ -177,7 +186,7 @@ export const getDeyeHistory = async (c) => {
             "Content-Type": "application/json",
             "Authorization": `bearer ${token}`
           },
-          body: JSON.stringify({ stationIds: [Number(stationId)], page: 1, size: 20 })
+          body: JSON.stringify({ stationIds: [numStationId || stationId], page: 1, size: 20 })
         });
         const devData = await deviceRes.json();
         const devices = devData.deviceListItems || devData.deviceList || [];
@@ -185,10 +194,21 @@ export const getDeyeHistory = async (c) => {
 
         if (inverter?.deviceSn) {
           targetDeviceSn = inverter.deviceSn;
-          // Persist found deviceSn to MongoDB devicelist
+          
+          // 🔧 FIXED: Use arrayFilters instead of positional $ operator to avoid Plan executor error
           await db.collection("userDetails").updateOne(
-            { _id: phoneNo, "devicelist.id": Number(stationId) },
-            { $set: { "devicelist.$.deviceSn": inverter.deviceSn } }
+            { _id: phoneNo },
+            { $set: { "devicelist.$[elem].deviceSn": inverter.deviceSn } },
+            { 
+              arrayFilters: [
+                { 
+                  $or: [
+                    { "elem.id": { $in: [numStationId, strStationId] } },
+                    { "elem.stationId": { $in: [numStationId, strStationId] } }
+                  ]
+                }
+              ] 
+            }
           );
         }
       }
@@ -205,7 +225,7 @@ export const getDeyeHistory = async (c) => {
 
         try {
           const currentLifetimeTotal = Number(data.generationTotal ?? 0);
-          const historyCacheDoc = await db.collection("solarSavingsCache").findOne({ _id: String(stationId) });
+          const historyCacheDoc = await db.collection("solarSavingsCache").findOne({ _id: strStationId });
           const midnightBaselineTotal = Number(historyCacheDoc?.dayStartBaselineTotal ?? 0);
 
           if (currentLifetimeTotal > 0 && midnightBaselineTotal > 0) {
@@ -236,7 +256,7 @@ export const getDeyeHistory = async (c) => {
       };
 
       await db.collection("solarSavingsCache").updateOne(
-        { _id: String(stationId) },
+        { _id: strStationId },
         {
           $set: {
             [`historyCache.${cacheKey}`]: chartDataToCache
