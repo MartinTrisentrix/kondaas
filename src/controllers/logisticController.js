@@ -1,4 +1,5 @@
 import { withDatabase } from '../utils/config.js'; 
+import { getZohoAccessToken } from '../utils/zohoAuth.js';
 
 const MONGODB_URI = process.env.MONGODB_URI;
 
@@ -491,3 +492,239 @@ export const getMyDispatches = async (c) => {
   }
 };
 
+
+
+// Zoho Creator Configuration
+const CREATOR_ACCOUNT_OWNER = "kondaasautomation";
+const CREATOR_APP_NAME = "packing-management";
+const PACKAGES_REPORT_NAME = "Packages";
+const DISPATCHES_REPORT_NAME = "Dispatches"; // Verify this exact report link name if updating parent dispatch in Creator
+
+/**
+ * Update record status in Zoho Creator v2 REST API
+ */
+async function updateCreatorRecord(reportLinkName, searchField, searchValue, updateData, zohoToken) {
+  // 1. Search for Record ID
+  const criteria = `${searchField}=="${searchValue}"`;
+  const searchUrl = `https://creator.zoho.in/api/v2/${CREATOR_ACCOUNT_OWNER}/${CREATOR_APP_NAME}/report/${reportLinkName}?criteria=(${encodeURIComponent(criteria)})`;
+
+  const searchRes = await fetch(searchUrl, {
+    headers: { Authorization: `Zoho-oauthtoken ${zohoToken}` }
+  });
+
+  if (!searchRes.ok) {
+    const errTxt = await searchRes.text();
+    throw new Error(`Creator Search Failed (${reportLinkName}): ${errTxt}`);
+  }
+
+  const searchData = await searchRes.json();
+  const recordId = searchData.data?.[0]?.ID;
+
+  if (!recordId) {
+    throw new Error(`Record not found in Creator [${reportLinkName}] for: ${searchValue}`);
+  }
+
+  // 2. Patch Record Status
+  const updateUrl = `https://creator.zoho.in/api/v2/${CREATOR_ACCOUNT_OWNER}/${CREATOR_APP_NAME}/report/${reportLinkName}/${recordId}`;
+
+  const updateRes = await fetch(updateUrl, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Zoho-oauthtoken ${zohoToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ data: updateData })
+  });
+
+  if (!updateRes.ok) {
+    const errTxt = await updateRes.text();
+    throw new Error(`Creator Update Failed: ${errTxt}`);
+  }
+
+  return await updateRes.json();
+}
+
+export const updateDispatchOrPackageStatus = async (c) => {
+  try {
+    const body = await c.req.json();
+    const { dispatch_number, package_number, status } = body;
+
+    if (!dispatch_number || !status) {
+      return c.json({ error: "Validation Error: Missing 'dispatch_number' or 'status'." }, 400);
+    }
+
+    const normalized = status.toLowerCase().trim().replace(/[\s_]+/g, '-');
+    const isPackageUpdate = Boolean(package_number);
+
+    let zohoValue = null;
+    let localCleanedStatus = null;
+
+    if (isPackageUpdate) {
+      if (normalized === "packed") {
+        zohoValue = "Packed";
+        localCleanedStatus = "packed";
+      } else if (normalized === "shipped") {
+        zohoValue = "Shipped";
+        localCleanedStatus = "shipped";
+      } else if (normalized === "delivered") {
+        zohoValue = "Delivered";
+        localCleanedStatus = "delivered";
+      } else {
+        return c.json({ error: `Invalid package status: '${status}'. Must be: packed, shipped, delivered` }, 400);
+      }
+    } else {
+      if (normalized === "ready-to-ship" || normalized === "readytoship") {
+        zohoValue = "Ready to Ship";
+        localCleanedStatus = "ready_to_ship";
+      } else if (normalized === "shipped") {
+        zohoValue = "Shipped";
+        localCleanedStatus = "shipped";
+      } else if (normalized === "delivered") {
+        zohoValue = "Delivered";
+        localCleanedStatus = "delivered";
+      } else {
+        return c.json({ error: `Invalid dispatch status: '${status}'. Must be: ready to ship, shipped, delivered` }, 400);
+      }
+    }
+
+    return await withDatabase(MONGODB_URI, async (db) => {
+      const zohoToken = await getZohoAccessToken(db);
+      const dispatchesColl = db.collection("dispatches");
+
+      // ----------------------------------------------------
+      // 1. DIRECT DISPATCH UPDATE
+      // ----------------------------------------------------
+      if (!isPackageUpdate) {
+        let creatorDispatchUpdated = false;
+        let creatorError = null;
+
+        try {
+          await updateCreatorRecord(
+            DISPATCHES_REPORT_NAME,
+            "Dispatch_Number",
+            dispatch_number,
+            { Dispatch_Status: zohoValue },
+            zohoToken
+          );
+          creatorDispatchUpdated = true;
+        } catch (err) {
+          console.error("⚠️ Creator Dispatch Update Warning:", err.message);
+          creatorError = err.message;
+        }
+
+        await dispatchesColl.updateOne(
+          { dispatch_number },
+          {
+            $set: {
+              dispatch_status: zohoValue,
+              status: localCleanedStatus,
+              updatedAt: new Date().toISOString()
+            }
+          }
+        );
+
+        return c.json({
+          success: true,
+          message: `Dispatch [${dispatch_number}] updated to '${zohoValue}'.`,
+          dispatch_number,
+          dispatch_status: zohoValue,
+          creator_synced: creatorDispatchUpdated,
+          error: creatorError
+        });
+      }
+
+      // ----------------------------------------------------
+      // 2. SPECIFIC PACKAGE UPDATE
+      // ----------------------------------------------------
+      const dispatchDoc = await dispatchesColl.findOne({
+        dispatch_number,
+        "packages.package_number": package_number
+      });
+
+      if (!dispatchDoc) {
+        return c.json({ error: `Package [${package_number}] not found under Dispatch [${dispatch_number}] in DB` }, 404);
+      }
+
+      let creatorPackageUpdated = false;
+      let creatorError = null;
+
+      try {
+        await updateCreatorRecord(
+          PACKAGES_REPORT_NAME,
+          "Package_Number",
+          package_number,
+          { Status: zohoValue },
+          zohoToken
+        );
+        creatorPackageUpdated = true;
+      } catch (err) {
+        console.error("⚠️ Creator Package Update Warning:", err.message);
+        creatorError = err.message;
+      }
+
+      // Update package in MongoDB
+      await dispatchesColl.updateOne(
+        { dispatch_number, "packages.package_number": package_number },
+        {
+          $set: {
+            "packages.$.status": zohoValue,
+            "packages.$.localStatus": localCleanedStatus,
+            "packages.$.updatedAt": new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+
+      // Check if all packages are delivered to auto-update Dispatch
+      const updatedDoc = await dispatchesColl.findOne({ dispatch_number });
+      const packagesList = updatedDoc.packages || [];
+      const allDelivered = packagesList.length > 0 && packagesList.every((p) => p.status === "Delivered");
+
+      let autoCompletedDispatch = false;
+
+      if (allDelivered && updatedDoc.dispatch_status !== "Delivered") {
+        try {
+          await updateCreatorRecord(
+            DISPATCHES_REPORT_NAME,
+            "Dispatch_Number",
+            dispatch_number,
+            { Dispatch_Status: "Delivered" },
+            zohoToken
+          );
+        } catch (err) {
+          console.warn("⚠️ Creator Auto Dispatch Update Warning:", err.message);
+        }
+
+        await dispatchesColl.updateOne(
+          { dispatch_number },
+          {
+            $set: {
+              dispatch_status: "Delivered",
+              status: "delivered",
+              delivered_at: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            }
+          }
+        );
+
+        autoCompletedDispatch = true;
+      }
+
+      return c.json({
+        success: true,
+        message: `Package [${package_number}] updated to '${zohoValue}'.${autoCompletedDispatch ? " All packages delivered — Dispatch marked Delivered." : ""}`,
+        dispatch_number,
+        package_number,
+        package_status: zohoValue,
+        dispatch_status: autoCompletedDispatch ? "Delivered" : updatedDoc.dispatch_status,
+        creator_synced: creatorPackageUpdated,
+        creator_error: creatorError,
+        all_packages_delivered: allDelivered
+      });
+    });
+
+  } catch (err) {
+    console.error("❌ Update Error:", err.message);
+    return c.json({ error: "Internal server error", details: err.message }, 500);
+  }
+};
